@@ -3,7 +3,13 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { ChartCandlestick, Bot } from "lucide-react";
+import {
+  ChartCandlestick,
+  Bot,
+  ChartNetwork,
+  TestTubeDiagonal,
+  Spotlight,
+} from "lucide-react";
 
 import {
   Sidebar as UiSidebar,
@@ -30,7 +36,22 @@ import {
 
 const NAV_ITEMS = [
   { label: "Bots", href: "/bots", icon: Bot },
-  { label: "Estrategias", href: "/strategies", icon: ChartCandlestick },
+  { label: "Estrategias", href: "/strategies", icon: ChartNetwork },
+  {
+    label: "Manual",
+    href: "/manual",
+    icon: ChartCandlestick,
+  },
+  {
+    label: "Backtesting",
+    href: "/backtesting",
+    icon: TestTubeDiagonal,
+  },
+  {
+    label: "Spot Prices",
+    href: "/spot",
+    icon: Spotlight,
+  },
 ];
 
 export function Sidebar() {

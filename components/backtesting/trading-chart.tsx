@@ -56,7 +56,7 @@ export function TradingChart({
 
       try {
         const baseUrl =
-          process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+          process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
         const params = new URLSearchParams();
         params.set("limit", String(limit));
@@ -175,3 +175,4 @@ export function TradingChart({
     </div>
   );
 }
+

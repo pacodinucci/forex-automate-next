@@ -1,66 +1,44 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth"; // Better Auth
-import prisma from "@/lib/db";
-import { tradingApi } from "@/lib/trading-api";
+import type { CreateBotPayload } from "@/lib/types";
+import {
+  backendFetch,
+  parseBody,
+  relayBackendResponse,
+  requireSession,
+} from "@/lib/server/bot-backend";
 
-type FastApiBotInfo = {
-  id: string;
-  instrument: string;
-  trend_tf: string;
-  jw_tf: string;
-  running: boolean;
-};
-
-export async function GET(req: Request) {
-  const session = await auth.api.getSession({
-    headers: req.headers,
-  });
-
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export async function GET(request: Request) {
+  const session = await requireSession(request.headers);
+  if (session instanceof NextResponse) {
+    return session;
   }
 
-  const bots = await prisma.bot.findMany({
-    where: { userId: session.user.id }, // si tu modelo tiene userId
-    orderBy: { createdAt: "desc" },
-  });
+  const url = new URL(request.url);
+  const userId = url.searchParams.get("userId");
+  const backendPath = userId
+    ? `/bots?userId=${encodeURIComponent(userId)}`
+    : "/bots";
 
-  return NextResponse.json(bots);
+  const response = await backendFetch(backendPath);
+  return relayBackendResponse(response);
 }
 
-export async function POST(req: Request) {
-  const session = await auth.api.getSession({
-    headers: req.headers,
-  });
-
-  if (!session) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+export async function POST(request: Request) {
+  const session = await requireSession(request.headers);
+  if (session instanceof NextResponse) {
+    return session;
   }
 
-  const body = await req.json();
-  const { instrument, trend_tf = "M30", jw_tf = "M5", name } = body;
+  const body = await parseBody<CreateBotPayload>(request);
+  const payload: CreateBotPayload = {
+    ...body,
+    userId: body.userId ?? session.userId,
+  };
 
-  const botName =
-    name ?? `${instrument} ${trend_tf.toUpperCase()}/${jw_tf.toUpperCase()}`;
-
-  // 1) crear bot en FastAPI (motor)
-  const fastBot = await tradingApi<FastApiBotInfo>("/bots", {
+  const response = await backendFetch("/bots", {
     method: "POST",
-    body: JSON.stringify({ instrument, trend_tf, jw_tf }),
+    body: JSON.stringify(payload),
   });
 
-  // 2) guardar en Neon
-  const bot = await prisma.bot.create({
-    data: {
-      id: fastBot.id,
-      userId: session.user.id,
-      name: botName,
-      instrument: fastBot.instrument,
-      trendTimeframe: fastBot.trend_tf,
-      signalTimeframe: fastBot.jw_tf,
-      status: fastBot.running ? "RUNNING" : "STOPPED",
-    },
-  });
-
-  return NextResponse.json(bot, { status: 201 });
+  return relayBackendResponse(response);
 }

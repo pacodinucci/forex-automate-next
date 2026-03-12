@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { appApi } from "@/lib/app-api";
+import { getBots } from "@/lib/bots-api";
 import type { Bot } from "@/lib/types";
 
 export function useBots() {
@@ -11,10 +11,10 @@ export function useBots() {
     try {
       setLoading(true);
       setError(null);
-      const data = await appApi<Bot[]>("/bots");
+      const data = await getBots();
       setBots(data);
-    } catch (err: any) {
-      setError(err?.message ?? "Error cargando bots");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error loading bots");
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,5 @@
 const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+  process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export async function tradingApi<T>(
   path: string,
@@ -21,3 +21,4 @@ export async function tradingApi<T>(
 
   return res.json() as Promise<T>;
 }
+

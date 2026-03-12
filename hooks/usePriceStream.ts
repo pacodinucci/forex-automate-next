@@ -29,6 +29,16 @@ type BatchPricesMessage = {
     timestamp?: number;
   }>;
 };
+function isSingleQuoteMessage(message: SingleQuoteMessage | BatchPricesMessage): message is SingleQuoteMessage {
+  return (
+    "symbol" in message ||
+    "price" in message ||
+    "bid" in message ||
+    "ask" in message ||
+    "mid" in message ||
+    "timestamp" in message
+  );
+}
 
 function normalizeSymbols(symbols: string[]) {
   return [...new Set(symbols.map((symbol) => symbol.trim()).filter(Boolean))].sort();
@@ -110,9 +120,10 @@ export function usePriceStream(symbols: string[], interval = 1) {
         const raw = JSON.parse(event.data) as SingleQuoteMessage | BatchPricesMessage;
 
         if (raw.type === "prices" && "prices" in raw && Array.isArray(raw.prices)) {
+          const prices = raw.prices;
           setQuotes((current) => {
             const next = { ...current };
-            for (const item of raw.prices) {
+            for (const item of prices) {
               const quote = toLiveQuote(item);
               if (quote) {
                 next[quote.symbol] = mergeQuote(current[quote.symbol], quote);
@@ -124,6 +135,10 @@ export function usePriceStream(symbols: string[], interval = 1) {
         }
 
         if (raw.type && raw.type !== "quote") {
+          return;
+        }
+
+        if (!isSingleQuoteMessage(raw)) {
           return;
         }
 
@@ -161,3 +176,6 @@ export function usePriceStream(symbols: string[], interval = 1) {
 
   return { quotes, status };
 }
+
+
+

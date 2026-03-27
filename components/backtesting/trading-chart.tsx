@@ -55,15 +55,12 @@ export function TradingChart({
       setError(null);
 
       try {
-        const baseUrl =
-          process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
         const params = new URLSearchParams();
         params.set("limit", String(limit));
         if (start) params.set("start", start);
         if (end) params.set("end", end);
 
-        const url = `${baseUrl}/history/${instrument}/${timeframe}?${params.toString()}`;
+        const url = `/api/history/${encodeURIComponent(instrument)}/${encodeURIComponent(timeframe)}?${params.toString()}`;
 
         const res = await fetch(url);
         if (!res.ok) {

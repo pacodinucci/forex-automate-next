@@ -1,3 +1,5 @@
+import { getPublicWsBaseUrl } from "@/lib/endpoints";
+
 export type LiveQuote = {
   symbol: string;
   price?: number;
@@ -8,30 +10,8 @@ export type LiveQuote = {
   direction?: "up" | "down" | "flat";
 };
 
-function toWsBase(url: string) {
-  if (url.startsWith("ws://") || url.startsWith("wss://")) {
-    return url;
-  }
-
-  if (url.startsWith("https://")) {
-    return `wss://${url.slice("https://".length)}`;
-  }
-
-  if (url.startsWith("http://")) {
-    return `ws://${url.slice("http://".length)}`;
-  }
-
-  return url;
-}
-
 function getMarketWsBaseUrl() {
-  const explicit = process.env.NEXT_PUBLIC_API_WS_URL;
-  if (explicit) {
-    return explicit.replace(/\/+$/, "");
-  }
-
-  const httpBase = process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-  return `${toWsBase(httpBase).replace(/\/+$/, "")}/ws/prices`;
+  return `${getPublicWsBaseUrl()}/ws/prices`;
 }
 
 export function getMarketWsUrl(symbols: string[], interval = 1) {

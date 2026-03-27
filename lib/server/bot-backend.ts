@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getPublicApiBaseUrl } from "@/lib/api-base";
-
-const BOT_BACKEND_BASE =
-  process.env.BOT_API_BASE_URL ?? getPublicApiBaseUrl();
+import { getServerApiBaseUrl } from "@/lib/endpoints";
 
 type SessionResult = {
   userId: string;
@@ -19,18 +16,53 @@ export async function requireSession(headers: Headers): Promise<SessionResult | 
   return { userId: session.user.id };
 }
 
+function backendUnavailableResponse(path: string, error: unknown) {
+  const message = error instanceof Error ? error.message : "Backend unavailable";
+  const baseUrl = (() => {
+    try {
+      return getServerApiBaseUrl();
+    } catch {
+      return "(missing backend base URL config)";
+    }
+  })();
+
+  return new Response(
+    JSON.stringify({
+      error: "Backend unavailable",
+      detail: `Could not reach backend at ${baseUrl}${path}. ${message}`,
+    }),
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
+}
+
 export async function backendFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers ?? {});
+  let backendBase = "";
 
   if (!headers.has("Content-Type") && init.body) {
     headers.set("Content-Type", "application/json");
   }
 
-  return fetch(`${BOT_BACKEND_BASE}${path}`, {
-    ...init,
-    headers,
-    cache: "no-store",
-  });
+  try {
+    backendBase = getServerApiBaseUrl();
+  } catch (error) {
+    return backendUnavailableResponse(path, error);
+  }
+
+  try {
+    return await fetch(`${backendBase}${path}`, {
+      ...init,
+      headers,
+      cache: "no-store",
+    });
+  } catch (error) {
+    return backendUnavailableResponse(path, error);
+  }
 }
 
 export async function relayBackendResponse(response: Response): Promise<NextResponse> {

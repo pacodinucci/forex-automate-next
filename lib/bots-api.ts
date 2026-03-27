@@ -108,10 +108,35 @@ export async function deleteBot(botId: string) {
   });
 }
 
+export async function deleteBots(botIds: string[]) {
+  const results = await Promise.allSettled(botIds.map((botId) => deleteBot(botId)));
+  const failed = results.filter((result) => result.status === "rejected").length;
+
+  return {
+    total: botIds.length,
+    succeeded: botIds.length - failed,
+    failed,
+  };
+}
+
 export async function runBotAction(botId: string, action: "start" | "pause" | "stop" | "resume") {
   return appApi(`/bots/${botId}/${action}`, {
     method: "POST",
   });
+}
+
+export async function runBotsAction(
+  botIds: string[],
+  action: "start" | "pause" | "stop" | "resume"
+) {
+  const results = await Promise.allSettled(botIds.map((botId) => runBotAction(botId, action)));
+  const failed = results.filter((result) => result.status === "rejected").length;
+
+  return {
+    total: botIds.length,
+    succeeded: botIds.length - failed,
+    failed,
+  };
 }
 
 export async function getBotLogs(botId: string, limit = 100) {

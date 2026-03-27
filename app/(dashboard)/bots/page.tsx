@@ -17,9 +17,11 @@ import {
 import { useBots } from "@/hooks/useBots";
 import { usePriceStream } from "@/hooks/usePriceStream";
 import {
+  deleteBots,
   deleteBot,
   getMarketRuntimeHealth,
   runBotAction,
+  runBotsAction,
   startActiveBotsStream,
 } from "@/lib/bots-api";
 import type { LiveQuote } from "@/lib/market-stream";
@@ -86,6 +88,7 @@ export default function BotsPage() {
   const [openCreate, setOpenCreate] = useState(false);
   const [createMode, setCreateMode] = useState<CreateMode>("single");
   const [actingId, setActingId] = useState<string | null>(null);
+  const [bulkAction, setBulkAction] = useState<"pause" | "resume" | "stop" | "delete" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
@@ -173,6 +176,69 @@ export default function BotsPage() {
     await Promise.all([refresh(), loadRuntimeHealth()]);
   }
 
+  async function handleBulkAction(action: "pause" | "resume" | "stop") {
+    const candidates = bots.filter((bot) => {
+      if (action === "pause") return bot.status === "RUNNING";
+      if (action === "resume") return bot.status === "PAUSED";
+      return bot.status === "RUNNING" || bot.status === "PAUSED" || bot.status === "ERROR";
+    });
+
+    if (candidates.length === 0) {
+      return;
+    }
+
+    try {
+      setBulkAction(action);
+      setActionError(null);
+      const result = await runBotsAction(
+        candidates.map((bot) => bot.id),
+        action
+      );
+
+      if (result.failed > 0) {
+        setActionError(
+          `Global ${action}: ${result.succeeded}/${result.total} bots updated. ${result.failed} failed.`
+        );
+      }
+
+      await Promise.all([refresh(), loadRuntimeHealth()]);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not complete bulk action");
+    } finally {
+      setBulkAction(null);
+    }
+  }
+
+  async function handleDeleteAll() {
+    if (bots.length === 0) {
+      return;
+    }
+
+    try {
+      setBulkAction("delete");
+      setActionError(null);
+      const result = await deleteBots(bots.map((bot) => bot.id));
+
+      if (result.failed > 0) {
+        setActionError(
+          `Global delete: ${result.succeeded}/${result.total} bots deleted. ${result.failed} failed.`
+        );
+      }
+
+      await Promise.all([refresh(), loadRuntimeHealth()]);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not complete bulk delete");
+    } finally {
+      setBulkAction(null);
+    }
+  }
+
+  const runningCount = bots.filter((bot) => bot.status === "RUNNING").length;
+  const pausedCount = bots.filter((bot) => bot.status === "PAUSED").length;
+  const stoppableCount = bots.filter(
+    (bot) => bot.status === "RUNNING" || bot.status === "PAUSED" || bot.status === "ERROR"
+  ).length;
+
   function openCreateModal(mode: CreateMode) {
     setCreateMode(mode);
     setOpenCreate(true);
@@ -237,14 +303,59 @@ export default function BotsPage() {
       {!loading && bots.length > 0 ? (
         <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
           <div className="border-b px-4 py-3">
-            <div className="relative max-w-md">
-              <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search or filter..."
-                className="h-10 rounded-full border-0 bg-muted/65 pr-4 pl-9 shadow-none focus-visible:ring-2"
-              />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="relative w-full max-w-md">
+                <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
+                <Input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Search or filter..."
+                  className="h-10 rounded-full border-0 bg-muted/65 pr-4 pl-9 shadow-none focus-visible:ring-2"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2.5 text-xs"
+                  onClick={() => handleBulkAction("pause")}
+                  disabled={bulkAction !== null || runningCount === 0}
+                >
+                  <Pause className="mr-2 h-4 w-4" />
+                  Pause all ({runningCount})
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2.5 text-xs"
+                  onClick={() => handleBulkAction("resume")}
+                  disabled={bulkAction !== null || pausedCount === 0}
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  Resume all ({pausedCount})
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 px-2.5 text-xs"
+                  onClick={() => handleBulkAction("stop")}
+                  disabled={bulkAction !== null || stoppableCount === 0}
+                >
+                  <Square className="mr-2 h-4 w-4" />
+                  Stop all ({stoppableCount})
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-8 px-2.5 text-xs"
+                  onClick={handleDeleteAll}
+                  disabled={bulkAction !== null || bots.length === 0}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete all ({bots.length})
+                </Button>
+              </div>
             </div>
           </div>
 

@@ -9,6 +9,7 @@ import {
   getBotLogs,
   runBotAction,
   runBotDryRun,
+  startActiveBotsStream,
 } from "@/lib/bots-api";
 import type {
   Bot,
@@ -20,6 +21,7 @@ import type {
 import { usePriceStream } from "@/hooks/usePriceStream";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import RuntimePixiChart from "@/components/bots/runtime-pixi-chart";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -43,6 +45,9 @@ function formatStage(stage: string) {
   if (stage === "WAITING_M15_ENTRY") return "Waiting M15 entry";
   if (stage === "WAITING_M5_SETUP") return "Waiting M5 setup";
   if (stage === "WAITING_M1_ENTRY") return "Waiting M1 entry";
+  if (stage === "WAITING_H4_LEGS") return "Waiting H4 legs";
+  if (stage === "WAITING_M5_LEGS") return "Waiting M5 legs";
+  if (stage === "WAITING_BREAKOUT_OR_ENTRY") return "Waiting breakout or entry";
   return stage;
 }
 
@@ -70,15 +75,73 @@ function formatLivePrice(value: number | undefined) {
   return value.toFixed(5);
 }
 
-function RuntimeStateCard({ runtimeState }: { runtimeState: BotStrategyRuntimeState }) {
+function normalizeSymbolKey(value: string | undefined | null) {
+  return String(value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function asNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function RuntimeStateCard({
+  runtimeState,
+  livePrice,
+  liveTimestamp,
+}: {
+  runtimeState: BotStrategyRuntimeState;
+  livePrice?: number;
+  liveTimestamp?: number;
+}) {
   const strategyId = String(runtimeState.strategy ?? "").toLowerCase();
   const isPeakDipH4 = strategyId === "peak_dip";
   const isPeakDipM5M1 = strategyId === "peak_dip_m5_m1";
+  const isLegContinuationH4M15 = strategyId === "leg_continuation_h4_m15";
+  const isLegContinuationM5M1 = strategyId === "leg_continuation_m5_m1";
+  const isLegContinuationStrategy = isLegContinuationH4M15 || isLegContinuationM5M1;
   const isPeakPatternStrategy = isPeakDipH4 || isPeakDipM5M1;
   const timeframeLabel = isPeakDipM5M1 ? "M5" : "H4";
   const runtimeProgress = isPeakDipM5M1 ? runtimeState.m5_progress : runtimeState.h4_progress;
   const runtimeCandles = isPeakDipM5M1 ? runtimeState.m5_last_4 ?? [] : runtimeState.h4_last_4 ?? [];
   const candles = [...runtimeCandles].slice(-4);
+  const setupTimeframeLabel = isLegContinuationM5M1 ? "M5" : "H4";
+  const entryTimeframeLabel = isLegContinuationM5M1 ? "M1" : "M15";
+  const setupCount = isLegContinuationM5M1
+    ? (runtimeState.m5_count ?? runtimeState.h4_count)
+    : (runtimeState.h4_count ?? runtimeState.m5_count);
+  const entryCount = isLegContinuationM5M1
+    ? (runtimeState.m1_count ?? runtimeState.m15_count)
+    : (runtimeState.m15_count ?? runtimeState.m1_count);
+  const legContinuationSetupCandles = [
+    ...((isLegContinuationM5M1
+      ? (runtimeState.m5_last_4 ?? runtimeState.h4_last_4 ?? [])
+      : (runtimeState.h4_last_4 ?? runtimeState.m5_last_4 ?? [])) as BotRuntimeH4Candle[]),
+  ].slice(-4);
+  const legContinuationEntryCandles = [
+    ...((isLegContinuationM5M1
+      ? (runtimeState.m1_last_4 ?? runtimeState.m15_last_4 ?? [])
+      : (runtimeState.m15_last_4 ?? runtimeState.m1_last_4 ?? [])) as BotRuntimeH4Candle[]),
+  ].slice(-4);
+  const continuationLevel = typeof runtimeState.current_setup?.continuation_level === "number"
+    ? runtimeState.current_setup.continuation_level
+    : undefined;
+  const currentSetup = runtimeState.current_setup ?? {};
+  const m5LegFromSetup =
+    asNumber((currentSetup as Record<string, unknown>).m5_leg) ??
+    asNumber((currentSetup as Record<string, unknown>).m5_leg_index) ??
+    asNumber((currentSetup as Record<string, unknown>).leg) ??
+    asNumber((currentSetup as Record<string, unknown>).leg_index) ??
+    asNumber((currentSetup as Record<string, unknown>).current_leg);
+  const m5CurrentLeg = isLegContinuationM5M1
+    ? Math.max(1, Math.floor(asNumber(runtimeState.m5_count) ?? m5LegFromSetup ?? legContinuationSetupCandles.length))
+    : undefined;
+  const currentStage = runtimeState.stage ? formatStage(String(runtimeState.stage)) : "-";
 
   return (
     <Card>
@@ -158,7 +221,71 @@ function RuntimeStateCard({ runtimeState }: { runtimeState: BotStrategyRuntimeSt
           </div>
         ) : null}
 
-        {!isPeakPatternStrategy ? (
+        {isLegContinuationStrategy ? (
+          <div className="space-y-4">
+            <div className="rounded-md border bg-muted/30 p-4">
+              <div className="mb-3 text-sm font-medium">{setupTimeframeLabel}/{entryTimeframeLabel} setup progress</div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <div className="text-xs uppercase text-muted-foreground">{setupTimeframeLabel} candles buffered</div>
+                  <div className="text-sm">{setupCount ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase text-muted-foreground">{entryTimeframeLabel} candles buffered</div>
+                  <div className="text-sm">{entryCount ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase text-muted-foreground">Pivot strength</div>
+                  <div className="text-sm">{runtimeState.pivot_strength ?? "-"}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase text-muted-foreground">Pending setups</div>
+                  <div className="text-sm">{runtimeState.pending_setups_count ?? "-"}</div>
+                </div>
+              </div>
+            </div>
+
+            {runtimeState.current_setup ? (
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Current setup</div>
+                <pre className="overflow-x-auto rounded-md border bg-muted p-3 text-xs">
+                  {JSON.stringify(runtimeState.current_setup, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+
+            <div className="space-y-4">
+              <RuntimePixiChart
+                title={`${setupTimeframeLabel} structure`}
+                timeframeLabel={setupTimeframeLabel}
+                symbol={String(runtimeState.symbol ?? "")}
+                stageLabel={currentStage}
+                candlesFallback={legContinuationSetupCandles}
+                continuationLevel={continuationLevel}
+                livePrice={livePrice}
+                liveTimestamp={liveTimestamp}
+                currentLeg={m5CurrentLeg}
+                showLegLabels={isLegContinuationM5M1}
+              />
+              <RuntimePixiChart
+                title={`${entryTimeframeLabel} entry`}
+                timeframeLabel={entryTimeframeLabel}
+                symbol={String(runtimeState.symbol ?? "")}
+                stageLabel={currentStage}
+                candlesFallback={legContinuationEntryCandles}
+                continuationLevel={continuationLevel}
+                livePrice={livePrice}
+                liveTimestamp={liveTimestamp}
+              />
+              <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
+                <div>Stage: {currentStage}</div>
+                <div>Continuation: {continuationLevel?.toFixed(5) ?? "-"}</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {!isPeakPatternStrategy && !isLegContinuationStrategy ? (
           <div className="space-y-2">
             <div className="text-sm font-medium">Runtime state payload</div>
             <pre className="overflow-x-auto rounded-md border bg-muted p-3 text-xs">
@@ -191,15 +318,33 @@ export default function BotDetailPage() {
   const showRuntimeState = Boolean(bot?.status === "RUNNING" && bot.runtimeActive && bot.strategyRuntimeState);
 
   const liveSymbols = useMemo(() => {
-    if (!bot || bot.status !== "RUNNING" || !bot.runtimeActive) {
+    if (!bot?.symbol) {
       return [] as string[];
     }
 
-    return [bot.symbol];
+    const primary = String(bot.symbol).trim();
+    const secondary = String(bot.instrument ?? "").trim();
+    const symbols = [primary, secondary].filter(Boolean);
+    return [...new Set(symbols)];
   }, [bot]);
 
-  const { quotes } = usePriceStream(liveSymbols, 1);
-  const liveQuote = bot ? quotes[bot.symbol] : undefined;
+  const { quotes, status: streamStatus, lastMessageAt } = usePriceStream(liveSymbols, 1);
+  const liveQuote = useMemo(() => {
+    if (!bot) return undefined;
+
+    const candidates = [bot.symbol, bot.instrument]
+      .map((value) => normalizeSymbolKey(value))
+      .filter(Boolean);
+
+    for (const [symbol, quote] of Object.entries(quotes)) {
+      const normalized = normalizeSymbolKey(symbol);
+      if (candidates.includes(normalized)) {
+        return quote;
+      }
+    }
+
+    return undefined;
+  }, [bot, quotes]);
   const livePrice = liveQuote?.mid ?? liveQuote?.price ?? liveQuote?.bid ?? liveQuote?.ask;
 
   const loadData = useCallback(async () => {
@@ -225,6 +370,14 @@ export default function BotDetailPage() {
     if (!botId) return;
     void loadData();
   }, [botId, loadData]);
+
+  useEffect(() => {
+    if (!bot || bot.status !== "RUNNING" || !bot.runtimeActive) {
+      return;
+    }
+
+    void startActiveBotsStream().catch(() => null);
+  }, [bot]);
 
   async function runAction(action: BotAction) {
     try {
@@ -317,10 +470,23 @@ export default function BotDetailPage() {
             <div className="text-xs uppercase text-muted-foreground">Updated</div>
             <div className="text-sm">{bot.updatedAt ? new Date(bot.updatedAt).toLocaleString() : "-"}</div>
           </div>
+          <div>
+            <div className="text-xs uppercase text-muted-foreground">Price stream</div>
+            <div className="text-sm">
+              {streamStatus}
+              {lastMessageAt ? ` | ${new Date(lastMessageAt).toLocaleTimeString()}` : ""}
+            </div>
+          </div>
         </CardContent>
       </Card>
 
-      {showRuntimeState ? <RuntimeStateCard runtimeState={bot.strategyRuntimeState!} /> : null}
+      {showRuntimeState ? (
+        <RuntimeStateCard
+          runtimeState={bot.strategyRuntimeState!}
+          livePrice={livePrice}
+          liveTimestamp={liveQuote?.timestamp}
+        />
+      ) : null}
 
       <Card>
         <CardHeader>

@@ -24,7 +24,10 @@ export type BotRuntimeStage =
   | "WAITING_H4_SETUP"
   | "WAITING_M15_ENTRY"
   | "WAITING_M5_SETUP"
-  | "WAITING_M1_ENTRY";
+  | "WAITING_M1_ENTRY"
+  | "WAITING_H4_LEGS"
+  | "WAITING_M5_LEGS"
+  | "WAITING_BREAKOUT_OR_ENTRY";
 
 export type BotRuntimeH4Candle = {
   time_utc: string;
@@ -48,7 +51,16 @@ export type BotStrategyRuntimeState = {
   symbol?: string;
   stage?: BotRuntimeStage | string;
   pending_windows_count?: number;
+  pending_setups_count?: number;
+  h4_count?: number;
+  m5_count?: number;
+  m15_count?: number;
+  m1_count?: number;
+  pivot_strength?: number;
+  current_setup?: Record<string, unknown> | null;
   h4_last_4?: BotRuntimeH4Candle[];
+  m1_last_4?: BotRuntimeH4Candle[];
+  m15_last_4?: BotRuntimeH4Candle[];
   h4_progress?: BotRuntimeH4Progress | null;
   m5_last_4?: BotRuntimeH4Candle[];
   m5_progress?: BotRuntimeH4Progress | null;

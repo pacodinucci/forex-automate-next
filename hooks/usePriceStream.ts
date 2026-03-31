@@ -6,42 +6,24 @@ import { getMarketWsUrl } from "@/lib/market-stream";
 
 type StreamStatus = "idle" | "connecting" | "open" | "closed" | "error";
 
-type SingleQuoteMessage = Partial<LiveQuote> & {
-  type?: string;
+type QuoteLike = {
   symbol?: string;
+  price?: number;
   bid?: number;
   ask?: number;
   mid?: number;
-  price?: number;
   timestamp?: number;
 };
 
-type BatchPricesMessage = {
-  type?: string;
-  count?: number;
-  symbols?: string[];
-  prices?: Array<{
-    symbol?: string;
-    price?: number;
-    bid?: number;
-    ask?: number;
-    mid?: number;
-    timestamp?: number;
-  }>;
-};
-function isSingleQuoteMessage(message: SingleQuoteMessage | BatchPricesMessage): message is SingleQuoteMessage {
-  return (
-    "symbol" in message ||
-    "price" in message ||
-    "bid" in message ||
-    "ask" in message ||
-    "mid" in message ||
-    "timestamp" in message
-  );
-}
-
 function normalizeSymbols(symbols: string[]) {
   return [...new Set(symbols.map((symbol) => symbol.trim()).filter(Boolean))].sort();
+}
+
+function normalizeSymbolKey(value: string | undefined | null) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
 }
 
 function toLiveQuote(message: {
@@ -95,11 +77,106 @@ function mergeQuote(previous: LiveQuote | undefined, incoming: LiveQuote) {
   };
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function pickNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+}
+
+function asQuoteLike(value: unknown): QuoteLike | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  const symbol = typeof value.symbol === "string"
+    ? normalizeSymbolKey(value.symbol)
+    : typeof value.instrument === "string"
+      ? normalizeSymbolKey(value.instrument)
+      : undefined;
+
+  const price = pickNumber(value.price);
+  const bid = pickNumber(value.bid);
+  const ask = pickNumber(value.ask);
+  const mid = pickNumber(value.mid);
+  const timestamp = pickNumber(value.timestamp ?? value.ts ?? value.time);
+
+  if (!symbol && price === undefined && bid === undefined && ask === undefined && mid === undefined) {
+    return null;
+  }
+
+  return {
+    symbol,
+    price,
+    bid,
+    ask,
+    mid,
+    timestamp,
+  };
+}
+
+function extractQuotes(payload: unknown): QuoteLike[] {
+  if (Array.isArray(payload)) {
+    return payload.map(asQuoteLike).filter((item): item is QuoteLike => Boolean(item));
+  }
+
+  const direct = asQuoteLike(payload);
+  if (direct) {
+    return [direct];
+  }
+
+  if (!isObject(payload)) {
+    return [];
+  }
+
+  const candidates = [
+    payload.prices,
+    payload.quotes,
+    payload.items,
+    payload.data,
+    payload.payload,
+    payload.tick,
+    payload.quote,
+  ];
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      const quotes = candidate.map(asQuoteLike).filter((item): item is QuoteLike => Boolean(item));
+      if (quotes.length > 0) {
+        return quotes;
+      }
+    }
+
+    const nested = asQuoteLike(candidate);
+    if (nested) {
+      return [nested];
+    }
+  }
+
+  return [];
+}
+
 export function usePriceStream(symbols: string[], interval = 1) {
   const normalizedSymbols = useMemo(() => normalizeSymbols(symbols), [symbols]);
   const [quotes, setQuotes] = useState<Record<string, LiveQuote>>({});
   const [connectionStatus, setConnectionStatus] = useState<Exclude<StreamStatus, "idle">>("connecting");
+  const [lastMessageAt, setLastMessageAt] = useState<number | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const lastMessageAtRef = useRef(0);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const [reconnectNonce, setReconnectNonce] = useState(0);
 
   useEffect(() => {
     if (normalizedSymbols.length === 0) {
@@ -108,8 +185,27 @@ export function usePriceStream(symbols: string[], interval = 1) {
       return;
     }
 
+    setConnectionStatus("connecting");
     const ws = new WebSocket(getMarketWsUrl(normalizedSymbols, interval));
     socketRef.current = ws;
+    lastMessageAtRef.current = Date.now();
+
+    const clearReconnectTimeout = () => {
+      if (reconnectTimeoutRef.current !== null) {
+        window.clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
+    };
+
+    const scheduleReconnect = () => {
+      if (reconnectTimeoutRef.current !== null) {
+        return;
+      }
+      reconnectTimeoutRef.current = window.setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        setReconnectNonce((value) => value + 1);
+      }, 900);
+    };
 
     ws.onopen = () => {
       setConnectionStatus("open");
@@ -117,40 +213,24 @@ export function usePriceStream(symbols: string[], interval = 1) {
 
     ws.onmessage = (event) => {
       try {
-        const raw = JSON.parse(event.data) as SingleQuoteMessage | BatchPricesMessage;
-
-        if (raw.type === "prices" && "prices" in raw && Array.isArray(raw.prices)) {
-          const prices = raw.prices;
-          setQuotes((current) => {
-            const next = { ...current };
-            for (const item of prices) {
-              const quote = toLiveQuote(item);
-              if (quote) {
-                next[quote.symbol] = mergeQuote(current[quote.symbol], quote);
-              }
-            }
-            return next;
-          });
+        const raw = JSON.parse(event.data) as unknown;
+        const now = Date.now();
+        lastMessageAtRef.current = now;
+        setLastMessageAt(now);
+        const extracted = extractQuotes(raw);
+        if (extracted.length === 0) {
           return;
         }
 
-        if (raw.type && raw.type !== "quote") {
-          return;
-        }
-
-        if (!isSingleQuoteMessage(raw)) {
-          return;
-        }
-
-        const quote = toLiveQuote(raw);
-        if (!quote) {
-          return;
-        }
-
-        setQuotes((current) => ({
-          ...current,
-          [quote.symbol]: mergeQuote(current[quote.symbol], quote),
-        }));
+        setQuotes((current) => {
+          const next = { ...current };
+          for (const item of extracted) {
+            const quote = toLiveQuote(item);
+            if (!quote) continue;
+            next[quote.symbol] = mergeQuote(current[quote.symbol], quote);
+          }
+          return next;
+        });
       } catch {
         setConnectionStatus("error");
       }
@@ -162,19 +242,38 @@ export function usePriceStream(symbols: string[], interval = 1) {
 
     ws.onclose = () => {
       setConnectionStatus("closed");
+      if (socketRef.current === ws && normalizedSymbols.length > 0) {
+        scheduleReconnect();
+      }
     };
 
+    const staleWatchdog = window.setInterval(() => {
+      if (socketRef.current !== ws) {
+        return;
+      }
+
+      if (ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      if (Date.now() - lastMessageAtRef.current > 10_000) {
+        ws.close(4000, "stale_stream");
+      }
+    }, 2500);
+
     return () => {
+      clearReconnectTimeout();
+      window.clearInterval(staleWatchdog);
       ws.close();
       if (socketRef.current === ws) {
         socketRef.current = null;
       }
     };
-  }, [interval, normalizedSymbols]);
+  }, [interval, normalizedSymbols, reconnectNonce]);
 
   const status: StreamStatus = normalizedSymbols.length === 0 ? "idle" : connectionStatus;
 
-  return { quotes, status };
+  return { quotes, status, lastMessageAt };
 }
 
 

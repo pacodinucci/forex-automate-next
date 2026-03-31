@@ -350,152 +350,161 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] flex-col overflow-hidden sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>{isBulk ? "Create Multiple Bots" : "Create Bot"}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label htmlFor="bot-name">Name {isBulk ? "prefix" : "(optional)"}</Label>
-            <Input
-              id="bot-name"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={isBulk ? "multi_peak" : "Peak/Dip EURUSD"}
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="account-id">Account ID *</Label>
-            <Input
-              id="account-id"
-              value={accountId}
-              onChange={(event) => setAccountId(event.target.value)}
-              placeholder="45440970"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label>Strategy</Label>
-            <Select value={strategyId} onValueChange={handleStrategyChange} disabled={loadingMeta || strategies.length === 0}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select strategy" />
-              </SelectTrigger>
-              <SelectContent>
-                {strategies.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {item.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label>Symbols</Label>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedSymbols(availableSymbols)}
-                >
-                  Select all
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedSymbols([availableSymbols[0] ?? FALLBACK_MAJOR_SYMBOLS[0]])}
-                >
-                  Clear
-                </Button>
-              </div>
-            </div>
-            <ScrollArea className="h-48 rounded-md border p-3">
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
-                {availableSymbols.map((item) => {
-                  const checked = selectedSymbols.includes(item);
-                  return (
-                    <label key={item} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={checked}
-                        onCheckedChange={(value) => toggleSymbol(item, value === true)}
-                      />
-                      <span>{item}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </ScrollArea>
-            <p className="text-xs text-muted-foreground">
-              {selectedSymbols.length} selected {isBulk ? "(bulk create)" : "(single create)"}
-            </p>
-          </div>
-
-          {selectedStrategy?.params.map((param) => (
-            <div key={param.key} className="space-y-2">
-              <Label htmlFor={`param-${param.key}`}>
-                {param.key}
-                {param.required ? " *" : ""}
-              </Label>
-              {param.type === "boolean" ? (
-                <Select
-                  value={strategyParams[param.key] || "false"}
-                  onValueChange={(value) => updateParam(param.key, value)}
-                >
-                  <SelectTrigger id={`param-${param.key}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="true">true</SelectItem>
-                    <SelectItem value="false">false</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  id={`param-${param.key}`}
-                  type={param.type === "int" || param.type === "float" ? "number" : "text"}
-                  value={strategyParams[param.key] ?? ""}
-                  onChange={(event) => updateParam(param.key, event.target.value)}
-                />
-              )}
-            </div>
-          ))}
-
-          {isPeakDip(strategyId) ? (
-            <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-4 overflow-y-auto py-2 pr-1">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+            <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="sl-points">SL points (optional)</Label>
+                <Label htmlFor="bot-name">Name {isBulk ? "prefix" : "(optional)"}</Label>
                 <Input
-                  id="sl-points"
-                  type="number"
-                  value={slPoints}
-                  onChange={(event) => setSlPoints(event.target.value)}
-                  placeholder="150"
+                  id="bot-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder={isBulk ? "multi_peak" : "Peak/Dip EURUSD"}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="tp-points">TP points (optional)</Label>
-                <Input
-                  id="tp-points"
-                  type="number"
-                  value={tpPoints}
-                  onChange={(event) => setTpPoints(event.target.value)}
-                  placeholder="300"
-                />
-              </div>
-            </div>
-          ) : null}
 
-          {isBulk ? (
-            <div className="flex items-center gap-2 rounded-md border p-3">
-              <Checkbox checked={autoStart} onCheckedChange={(value) => setAutoStart(value === true)} />
-              <Label className="text-sm">Auto-start bots after create</Label>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="account-id">Account ID *</Label>
+                  <Input
+                    id="account-id"
+                    value={accountId}
+                    onChange={(event) => setAccountId(event.target.value)}
+                    placeholder="45440970"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Strategy</Label>
+                  <Select value={strategyId} onValueChange={handleStrategyChange} disabled={loadingMeta || strategies.length === 0}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select strategy" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {strategies.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {selectedStrategy?.params.length ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {selectedStrategy.params.map((param) => (
+                    <div key={param.key} className="space-y-2">
+                      <Label htmlFor={`param-${param.key}`}>
+                        {param.key}
+                        {param.required ? " *" : ""}
+                      </Label>
+                      {param.type === "boolean" ? (
+                        <Select
+                          value={strategyParams[param.key] || "false"}
+                          onValueChange={(value) => updateParam(param.key, value)}
+                        >
+                          <SelectTrigger id={`param-${param.key}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="true">true</SelectItem>
+                            <SelectItem value="false">false</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          id={`param-${param.key}`}
+                          type={param.type === "int" || param.type === "float" ? "number" : "text"}
+                          value={strategyParams[param.key] ?? ""}
+                          onChange={(event) => updateParam(param.key, event.target.value)}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {isPeakDip(strategyId) ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="sl-points">SL points (optional)</Label>
+                    <Input
+                      id="sl-points"
+                      type="number"
+                      value={slPoints}
+                      onChange={(event) => setSlPoints(event.target.value)}
+                      placeholder="150"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tp-points">TP points (optional)</Label>
+                    <Input
+                      id="tp-points"
+                      type="number"
+                      value={tpPoints}
+                      onChange={(event) => setTpPoints(event.target.value)}
+                      placeholder="300"
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {isBulk ? (
+                <div className="flex items-center gap-2 rounded-md border p-3">
+                  <Checkbox checked={autoStart} onCheckedChange={(value) => setAutoStart(value === true)} />
+                  <Label className="text-sm">Auto-start bots after create</Label>
+                </div>
+              ) : null}
             </div>
-          ) : null}
+
+            <div className="space-y-2 rounded-md border p-3">
+              <div className="flex items-center justify-between gap-2">
+                <Label>Symbols</Label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedSymbols(availableSymbols)}
+                  >
+                    Select all
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedSymbols([availableSymbols[0] ?? FALLBACK_MAJOR_SYMBOLS[0]])}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+              <ScrollArea className="h-[360px] rounded-md border p-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                  {availableSymbols.map((item) => {
+                    const checked = selectedSymbols.includes(item);
+                    return (
+                      <label key={item} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(value) => toggleSymbol(item, value === true)}
+                        />
+                        <span>{item}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+              <p className="text-xs text-muted-foreground">
+                {selectedSymbols.length} selected {isBulk ? "(bulk create)" : "(single create)"}
+              </p>
+            </div>
+          </div>
 
           {bulkResult ? (
             <div className="rounded-md border p-3 text-sm">
@@ -525,7 +534,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
           ) : null}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>

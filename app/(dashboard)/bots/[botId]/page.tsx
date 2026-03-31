@@ -266,6 +266,7 @@ function RuntimeStateCard({
                 liveTimestamp={liveTimestamp}
                 currentLeg={m5CurrentLeg}
                 showLegLabels={isLegContinuationM5M1}
+                pivotStrength={asNumber(runtimeState.pivot_strength)}
               />
               <RuntimePixiChart
                 title={`${entryTimeframeLabel} entry`}

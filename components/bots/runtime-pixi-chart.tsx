@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BotRuntimeH4Candle } from "@/lib/types";
@@ -17,6 +17,7 @@ type Props = {
   liveTimestamp?: number;
   currentLeg?: number;
   showLegLabels?: boolean;
+  pivotStrength?: number;
 };
 
 type Candle = {
@@ -37,16 +38,26 @@ type DrawLayout = {
 };
 
 type VisibleLeg = {
+  legId: number;
   startIdx: number;
   endIdx: number;
   high: number;
   low: number;
   direction: "bull" | "bear";
+  startPrice: number;
+  endPrice: number;
 };
 
 type BreakLevel = {
   price: number;
   direction: "bull" | "bear";
+};
+
+type CandidateLevels = {
+  continuationPrice: number;
+  continuationDirection: "bull" | "bear";
+  reversalPrice: number;
+  reversalDirection: "bull" | "bear";
 };
 
 function timeframeToMinutes(timeframe: string) {
@@ -107,46 +118,139 @@ function formatXAxisLabel(iso: string, timeframeMin: number) {
   });
 }
 
-function buildVisibleLegs(candles: Candle[]): VisibleLeg[] {
-  if (candles.length === 0) return [];
+type Pivot = {
+  pivotType: "high" | "low";
+  index: number;
+  pivotPrice: number;
+};
 
-  const legs: VisibleLeg[] = [];
-  let startIdx = 0;
-  let direction: "bull" | "bear" = candles[0].close >= candles[0].open ? "bull" : "bear";
-  let high = candles[0].high;
-  let low = candles[0].low;
+function findPivots(candles: Candle[], strength: number): Pivot[] {
+  const pivots: Pivot[] = [];
+  if (candles.length === 0) return pivots;
+  const s = Math.max(1, Math.floor(strength));
 
-  for (let i = 1; i < candles.length; i += 1) {
-    const candle = candles[i];
-    const nextDirection: "bull" | "bear" = candle.close >= candle.open ? "bull" : "bear";
-    if (nextDirection === direction) {
-      high = Math.max(high, candle.high);
-      low = Math.min(low, candle.low);
-      continue;
+  for (let i = s; i < candles.length - s; i += 1) {
+    const hi = candles[i].high;
+    const lo = candles[i].low;
+
+    let isPivotHigh = true;
+    let isPivotLow = true;
+    for (let j = i - s; j <= i + s; j += 1) {
+      if (j === i) continue;
+      if (hi <= candles[j].high) isPivotHigh = false;
+      if (lo >= candles[j].low) isPivotLow = false;
+      if (!isPivotHigh && !isPivotLow) break;
     }
 
-    legs.push({
-      startIdx,
-      endIdx: i - 1,
-      high,
-      low,
-      direction,
-    });
-
-    startIdx = i;
-    direction = nextDirection;
-    high = candle.high;
-    low = candle.low;
+    if (isPivotHigh) {
+      pivots.push({ pivotType: "high", index: i, pivotPrice: hi });
+    }
+    if (isPivotLow) {
+      pivots.push({ pivotType: "low", index: i, pivotPrice: lo });
+    }
   }
 
-  legs.push({
-    startIdx,
-    endIdx: candles.length - 1,
-    high,
-    low,
-    direction,
-  });
+  return pivots.sort((a, b) => a.index - b.index);
+}
 
+function compressPivots(pivots: Pivot[]): Pivot[] {
+  if (pivots.length === 0) return [];
+  const out: Pivot[] = [pivots[0]];
+  for (const p of pivots.slice(1)) {
+    const last = out[out.length - 1];
+    if (p.pivotType !== last.pivotType) {
+      out.push(p);
+      continue;
+    }
+    if (p.pivotType === "high") {
+      if (p.pivotPrice >= last.pivotPrice) out[out.length - 1] = p;
+    } else {
+      if (p.pivotPrice <= last.pivotPrice) out[out.length - 1] = p;
+    }
+  }
+  return out;
+}
+
+function buildLegsExtended(candles: Candle[], pivots: Pivot[]): VisibleLeg[] {
+  if (pivots.length < 2) return [];
+  const [p0, p1] = pivots;
+  if (p0.pivotType === p1.pivotType) return [];
+
+  let direction: "bull" | "bear";
+  let start = p0;
+  let extreme = p1;
+  let refLow: number | null = null;
+  let refHigh: number | null = null;
+
+  if (p0.pivotType === "low" && p1.pivotType === "high") {
+    direction = "bull";
+    refLow = p0.pivotPrice;
+  } else {
+    direction = "bear";
+    refHigh = p0.pivotPrice;
+  }
+
+  const legs: VisibleLeg[] = [];
+  const appendLeg = (legStart: Pivot, legEnd: Pivot, legDirection: "bull" | "bear") => {
+    const from = Math.min(legStart.index, legEnd.index);
+    const to = Math.max(legStart.index, legEnd.index);
+    let high = Number.NEGATIVE_INFINITY;
+    let low = Number.POSITIVE_INFINITY;
+    for (let i = from; i <= to; i += 1) {
+      high = Math.max(high, candles[i].high);
+      low = Math.min(low, candles[i].low);
+    }
+    legs.push({
+      legId: legs.length + 1,
+      startIdx: from,
+      endIdx: to,
+      high,
+      low,
+      direction: legDirection,
+      startPrice: legStart.pivotPrice,
+      endPrice: legEnd.pivotPrice,
+    });
+  };
+
+  for (const p of pivots.slice(2)) {
+    if (direction === "bear") {
+      if (p.pivotType === "low") {
+        if (p.pivotPrice <= extreme.pivotPrice) {
+          extreme = p;
+        }
+      } else {
+        if (refHigh !== null && p.pivotPrice > refHigh) {
+          appendLeg(start, extreme, "bear");
+          direction = "bull";
+          start = extreme;
+          extreme = p;
+          refLow = start.pivotPrice;
+          refHigh = null;
+        } else {
+          refHigh = p.pivotPrice;
+        }
+      }
+    } else {
+      if (p.pivotType === "high") {
+        if (p.pivotPrice >= extreme.pivotPrice) {
+          extreme = p;
+        }
+      } else {
+        if (refLow !== null && p.pivotPrice < refLow) {
+          appendLeg(start, extreme, "bull");
+          direction = "bear";
+          start = extreme;
+          extreme = p;
+          refHigh = start.pivotPrice;
+          refLow = null;
+        } else {
+          refLow = p.pivotPrice;
+        }
+      }
+    }
+  }
+
+  appendLeg(start, extreme, direction);
   return legs;
 }
 
@@ -157,11 +261,99 @@ function getBreakLevelFromLegs(legs: VisibleLeg[]): BreakLevel | null {
     const previous = legs[i];
     if (previous.direction !== current.direction) continue;
     return {
-      price: current.direction === "bull" ? previous.high : previous.low,
+      price: previous.endPrice,
       direction: current.direction,
     };
   }
   return null;
+}
+
+function getCandidateLevelsForOpenSegment(legs: VisibleLeg[], candles: Candle[]): CandidateLevels | null {
+  if (legs.length === 0 || candles.length === 0) return null;
+  const lastLeg = legs[legs.length - 1];
+  const hasUnconfirmedTail = candles.length - 1 > lastLeg.endIdx;
+  if (!hasUnconfirmedTail) return null;
+
+  if (lastLeg.direction === "bear") {
+    return {
+      continuationPrice: lastLeg.endPrice,
+      continuationDirection: "bear",
+      reversalPrice: lastLeg.startPrice,
+      reversalDirection: "bull",
+    };
+  }
+
+  return {
+    continuationPrice: lastLeg.endPrice,
+    continuationDirection: "bull",
+    reversalPrice: lastLeg.startPrice,
+    reversalDirection: "bear",
+  };
+}
+
+function timeframeAliases(timeframeLabel: string) {
+  const tf = timeframeLabel.trim().toUpperCase();
+  if (tf === "M1") return ["M1", "m1", "1m", "MINUTE_1"];
+  if (tf === "M5") return ["M5", "m5", "5m", "MINUTE_5"];
+  if (tf === "M15") return ["M15", "m15", "15m", "MINUTE_15"];
+  if (tf === "M30") return ["M30", "m30", "30m", "MINUTE_30"];
+  if (tf === "H1") return ["H1", "h1", "1h", "HOUR_1"];
+  if (tf === "H4") return ["H4", "h4", "4h", "HOUR_4"];
+  return [tf];
+}
+
+function mergeCandles(...inputs: Candle[][]) {
+  const dedup = new Map<string, Candle>();
+  for (const group of inputs) {
+    for (const candle of group) {
+      if (!candle.time_utc) continue;
+      dedup.set(candle.time_utc, candle);
+    }
+  }
+  return [...dedup.values()]
+    .sort((a, b) => new Date(a.time_utc).getTime() - new Date(b.time_utc).getTime())
+    .slice(-2000);
+}
+
+function parseHistoryCandles(payload: unknown): Candle[] {
+  const root =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const asArray = Array.isArray(payload)
+    ? payload
+    : Array.isArray(root?.candles)
+      ? (root?.candles as unknown[])
+      : Array.isArray(root?.data)
+        ? (root?.data as unknown[])
+        : root?.data && typeof root.data === "object" && Array.isArray((root.data as Record<string, unknown>).candles)
+          ? ((root.data as Record<string, unknown>).candles as unknown[])
+          : [];
+
+  return asArray
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const rawTime = row.time_utc ?? row.time ?? row.timeUtc ?? row.timestamp ?? row.ts;
+      const open = Number(row.open ?? row.o);
+      const high = Number(row.high ?? row.h);
+      const low = Number(row.low ?? row.l);
+      const close = Number(row.close ?? row.c);
+      if ([open, high, low, close].some((n) => Number.isNaN(n))) return null;
+
+      let iso = "";
+      if (typeof rawTime === "number" && Number.isFinite(rawTime)) {
+        const ms = rawTime > 10_000_000_000 ? rawTime : rawTime * 1000;
+        iso = new Date(ms).toISOString();
+      } else if (typeof rawTime === "string" && rawTime.trim()) {
+        const ms = Date.parse(rawTime);
+        if (!Number.isNaN(ms)) {
+          iso = new Date(ms).toISOString();
+        }
+      }
+      if (!iso) return null;
+
+      return { time_utc: iso, open, high, low, close };
+    })
+    .filter((item): item is Candle => Boolean(item));
 }
 
 function normalizeSymbolKey(value: string | undefined | null) {
@@ -245,26 +437,43 @@ export default function RuntimePixiChart({
   liveTimestamp,
   currentLeg,
   showLegLabels = false,
+  pivotStrength,
 }: Props) {
+  const DEFAULT_VISIBLE_BARS = 20;
   const ZOOM_IN_FACTOR = 0.84;
   const ZOOM_OUT_FACTOR = 1 / ZOOM_IN_FACTOR;
+  const PAN_SENSITIVITY = 1.9;
+  const PAN_ACCEL_MAX = 2.2;
+  const Y_ZOOM_STEP = 0.008;
+  const Y_ZOOM_MIN = 0.4;
+  const Y_ZOOM_MAX = 6.0;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<import("pixi.js").Application | null>(null);
   const drawLayoutRef = useRef<DrawLayout | null>(null);
   const rangeRef = useRef<{ start: number; end: number } | null>(null);
-  const draggingRef = useRef<{ active: boolean; x: number }>({ active: false, x: 0 });
+  const draggingRef = useRef<{ active: boolean; x: number; ts: number }>({ active: false, x: 0, ts: 0 });
+  const yScaleDragRef = useRef<{ active: boolean; y: number; zoom: number; anchorRatio: number; anchorPrice: number } | null>(null);
+  const yScaleAnchorRef = useRef<{ ratio: number; price: number } | null>(null);
+  const yScaleMetaRef = useRef<{ pTop: number; pRange: number; marginTop: number; innerHeight: number } | null>(null);
   const userInteractedRef = useRef(false);
   const appliedSnapshotRef = useRef<string>("");
+  const backfillAttemptsRef = useRef<Map<string, number>>(new Map());
 
   const [width, setWidth] = useState(900);
   const [appReadyTick, setAppReadyTick] = useState(0);
   const [candles, setCandles] = useState<Candle[]>(normalizeFallback(candlesFallback));
   const [wsTicks, setWsTicks] = useState(0);
   const [wsLive, setWsLive] = useState<{ price?: number; timestamp?: number }>({});
+  const [liveBoundaryIso, setLiveBoundaryIso] = useState<string | null>(null);
   const [range, setRange] = useState<{ start: number; end: number } | null>(null);
   const [crosshair, setCrosshair] = useState<{ x: number; y: number } | null>(null);
+  const [yZoom, setYZoom] = useState(1);
 
   const timeframeMin = useMemo(() => timeframeToMinutes(timeframeLabel), [timeframeLabel]);
+  const effectivePivotStrength = useMemo(
+    () => Math.max(1, Math.floor(Number.isFinite(Number(pivotStrength)) ? Number(pivotStrength) : 2)),
+    [pivotStrength]
+  );
   const fallbackSignature = useMemo(
     () =>
       candlesFallback
@@ -276,6 +485,11 @@ export default function RuntimePixiChart({
   const wsSymbol = useMemo(() => normalizeSymbolKey(symbol), [symbol]);
   const effectiveLivePrice = wsLive.price ?? livePrice;
   const effectiveLiveTimestamp = wsLive.timestamp ?? liveTimestamp;
+  const legs = useMemo(() => {
+    const pivots = compressPivots(findPivots(candles, effectivePivotStrength));
+    return buildLegsExtended(candles, pivots);
+  }, [candles, effectivePivotStrength]);
+  const candidateLevels = useMemo(() => getCandidateLevelsForOpenSegment(legs, candles), [legs, candles]);
 
   useEffect(() => {
     rangeRef.current = range;
@@ -292,7 +506,64 @@ export default function RuntimePixiChart({
     setWsTicks(0);
     setRange(null);
     setWsLive({});
+    setLiveBoundaryIso(null);
+    setYZoom(1);
+    yScaleAnchorRef.current = null;
   }, [fallbackSignature, symbol, timeframeLabel, normalizedFallback]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!symbol) return;
+    const backfillKey = `${normalizeSymbolKey(symbol)}|${timeframeLabel}`;
+
+    async function backfillHistory() {
+      // Avoid extra traffic when we already have enough bars from runtime/ws.
+      if (candles.length >= DEFAULT_VISIBLE_BARS) {
+        return;
+      }
+      const attempts = backfillAttemptsRef.current.get(backfillKey) ?? 0;
+      if (attempts >= 3) {
+        return;
+      }
+      backfillAttemptsRef.current.set(backfillKey, attempts + 1);
+
+      const aliases = timeframeAliases(timeframeLabel);
+      for (const tf of aliases) {
+        try {
+          const params = new URLSearchParams();
+          params.set("limit", String(Math.max(DEFAULT_VISIBLE_BARS * 5, 120)));
+          const url = `/api/history/${encodeURIComponent(symbol)}/${encodeURIComponent(tf)}?${params.toString()}`;
+          const response = await fetch(url, { cache: "no-store" });
+          if (!response.ok) {
+            continue;
+          }
+          const payload = (await response.json()) as unknown;
+          const history = parseHistoryCandles(payload);
+          if (history.length === 0) {
+            continue;
+          }
+          if (cancelled) return;
+          setCandles((current) => mergeCandles(history, current));
+          return;
+        } catch {
+          continue;
+        }
+      }
+
+      if (!cancelled) {
+        window.setTimeout(() => {
+          if (!cancelled) {
+            setCandles((current) => [...current]);
+          }
+        }, 1500);
+      }
+    }
+
+    void backfillHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [candles.length, symbol, timeframeLabel]);
 
   useEffect(() => {
     if (!wsSymbol) return;
@@ -386,7 +657,7 @@ export default function RuntimePixiChart({
     setRange((current) => {
       const end = candles.length - 1;
       if (!current) {
-        const initialVisible = Math.min(140, candles.length);
+        const initialVisible = Math.min(DEFAULT_VISIBLE_BARS, candles.length);
         return { start: Math.max(0, end - initialVisible + 1), end };
       }
 
@@ -410,6 +681,7 @@ export default function RuntimePixiChart({
     const bucketMs = timeframeMin * 60 * 1000;
     const bucketStartMs = Math.floor(ms / bucketMs) * bucketMs;
     const bucketIso = new Date(bucketStartMs).toISOString();
+    setLiveBoundaryIso((current) => current ?? bucketIso);
 
     setCandles((current) => {
       if (current.length === 0) {
@@ -439,8 +711,7 @@ export default function RuntimePixiChart({
       }
 
       if (bucketStartMs > lastBucketMs) {
-        const next = [
-          ...current,
+        return mergeCandles(current, [
           {
             time_utc: bucketIso,
             open: last.close,
@@ -448,8 +719,7 @@ export default function RuntimePixiChart({
             low: Math.min(last.close, effectiveLivePrice),
             close: effectiveLivePrice,
           },
-        ];
-        return next.slice(-2000);
+        ]);
       }
 
       const idx = current.findIndex((candle) => candle.time_utc === bucketIso);
@@ -512,22 +782,63 @@ export default function RuntimePixiChart({
 
     const onMouseDown = (event: MouseEvent) => {
       userInteractedRef.current = true;
-      draggingRef.current = { active: true, x: event.clientX };
+      const layout = drawLayoutRef.current;
+      const inPriceScale = Boolean(layout && event.offsetX >= layout.marginLeft + layout.innerWidth);
+      if (inPriceScale) {
+        const yMeta = yScaleMetaRef.current;
+        if (yMeta) {
+          const clampedY = Math.max(yMeta.marginTop, Math.min(yMeta.marginTop + yMeta.innerHeight, event.offsetY));
+          const ratio = (clampedY - yMeta.marginTop) / yMeta.innerHeight;
+          const anchorPrice = yMeta.pTop - ratio * yMeta.pRange;
+          yScaleDragRef.current = {
+            active: true,
+            y: event.clientY,
+            zoom: yZoom,
+            anchorRatio: ratio,
+            anchorPrice,
+          };
+          yScaleAnchorRef.current = { ratio, price: anchorPrice };
+          canvas.style.cursor = "ns-resize";
+          return;
+        }
+      }
+
+      draggingRef.current = { active: true, x: event.clientX, ts: performance.now() };
       canvas.style.cursor = "grabbing";
     };
 
     const onMouseMove = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       setCrosshair({ x: event.clientX - rect.left, y: event.clientY - rect.top });
-      if (!draggingRef.current.active) return;
+
+      if (yScaleDragRef.current?.active) {
+        const scale = yScaleDragRef.current;
+        const dy = event.clientY - scale.y;
+        const factor = Math.exp(-dy * Y_ZOOM_STEP);
+        const nextZoom = Math.max(Y_ZOOM_MIN, Math.min(Y_ZOOM_MAX, scale.zoom * factor));
+        yScaleAnchorRef.current = { ratio: scale.anchorRatio, price: scale.anchorPrice };
+        setYZoom(nextZoom);
+        canvas.style.cursor = "ns-resize";
+        return;
+      }
+
       const layout = drawLayoutRef.current;
+      const isPriceScaleHover = Boolean(layout && event.offsetX >= layout.marginLeft + layout.innerWidth);
+      if (!draggingRef.current.active) {
+        canvas.style.cursor = isPriceScaleHover ? "ns-resize" : "crosshair";
+        return;
+      }
       const current = rangeRef.current;
       if (!layout || !current) return;
 
+      const nowTs = performance.now();
       const dx = event.clientX - draggingRef.current.x;
-      draggingRef.current.x = event.clientX;
+      const dt = Math.max(1, nowTs - draggingRef.current.ts);
+      draggingRef.current = { ...draggingRef.current, x: event.clientX, ts: nowTs };
       const visible = current.end - current.start + 1;
-      const shift = Math.round((-dx / layout.innerWidth) * visible);
+      const pxPerMs = Math.abs(dx) / dt;
+      const accel = Math.min(PAN_ACCEL_MAX, 1 + pxPerMs * 3.5);
+      const shift = Math.round(((-dx / layout.innerWidth) * visible) * PAN_SENSITIVITY * accel);
       if (shift === 0) return;
 
       let start = current.start + shift;
@@ -545,9 +856,15 @@ export default function RuntimePixiChart({
 
     const onMouseUp = () => {
       draggingRef.current.active = false;
+      if (yScaleDragRef.current) {
+        yScaleDragRef.current.active = false;
+      }
       canvas.style.cursor = "crosshair";
     };
-    const onMouseLeave = () => setCrosshair(null);
+    const onMouseLeave = () => {
+      setCrosshair(null);
+      canvas.style.cursor = "crosshair";
+    };
 
     canvas.style.cursor = "crosshair";
     canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -562,7 +879,7 @@ export default function RuntimePixiChart({
       canvas.removeEventListener("mouseleave", onMouseLeave);
       window.removeEventListener("mouseup", onMouseUp);
     };
-  }, [appReadyTick, candles.length]);
+  }, [appReadyTick, candles.length, yZoom]);
 
   function zoomByFactor(factor: number) {
     const current = rangeRef.current;
@@ -588,9 +905,11 @@ export default function RuntimePixiChart({
 
   function resetView() {
     userInteractedRef.current = false;
+    setYZoom(1);
+    yScaleAnchorRef.current = null;
     if (candles.length === 0) return;
     const end = candles.length - 1;
-    const visible = Math.min(140, candles.length);
+    const visible = Math.min(DEFAULT_VISIBLE_BARS, candles.length);
     setRange({ start: Math.max(0, end - visible + 1), end });
   }
 
@@ -647,11 +966,32 @@ export default function RuntimePixiChart({
       if (typeof continuationLevel === "number" && Number.isFinite(continuationLevel)) prices.push(continuationLevel);
       const max = Math.max(...prices);
       const min = Math.min(...prices);
-      const pad = Math.max((max - min) * 0.1, 0.00002);
-      const pTop = max + pad;
-      const pBottom = min - pad;
-      const pRange = Math.max(pTop - pBottom, 0.00002);
+      const baseRange = Math.max(max - min, 0.00002);
+      const basePad = Math.max(baseRange * 0.1, 0.00002);
+      const baseTop = max + basePad;
+      const baseBottom = min - basePad;
+      const basePRange = Math.max(baseTop - baseBottom, 0.00002);
+
+      const clampedYZoom = Math.max(Y_ZOOM_MIN, Math.min(Y_ZOOM_MAX, yZoom));
+      const pRange = Math.max(basePRange / clampedYZoom, 0.00002);
+      const anchor = yScaleAnchorRef.current;
+      let pTop: number;
+      if (anchor) {
+        const ratio = Math.max(0, Math.min(1, anchor.ratio));
+        pTop = anchor.price + ratio * pRange;
+      } else {
+        const center = (baseTop + baseBottom) / 2;
+        pTop = center + pRange / 2;
+      }
+      const pBottom = pTop - pRange;
       const toY = (p: number) => margin.top + ((pTop - p) / pRange) * innerHeight;
+
+      yScaleMetaRef.current = {
+        pTop,
+        pRange,
+        marginTop: margin.top,
+        innerHeight,
+      };
 
       const grid = new Graphics();
       grid.lineStyle(1, 0xe2e8f0, 1);
@@ -700,13 +1040,53 @@ export default function RuntimePixiChart({
       const slot = innerWidth / Math.max(1, visible.length);
       const candleW = Math.max(2, Math.min(10, slot * 0.65));
 
+      if (liveBoundaryIso) {
+        const boundaryTime = new Date(liveBoundaryIso).getTime();
+        if (!Number.isNaN(boundaryTime)) {
+          const boundaryIdx = visible.findIndex((candle) => new Date(candle.time_utc).getTime() >= boundaryTime);
+          if (boundaryIdx > 0) {
+            const x = margin.left + boundaryIdx * slot;
+            const sep = new Graphics();
+            sep.lineStyle(1, 0x475569, 0.8);
+            const segment = 5;
+            const gap = 4;
+            for (let y = margin.top; y < height - margin.bottom; y += segment + gap) {
+              const y2 = Math.min(height - margin.bottom, y + segment);
+              sep.moveTo(x, y);
+              sep.lineTo(x, y2);
+            }
+            app.stage.addChild(sep);
+
+            const label = new Text("Live", new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 10,
+              fill: 0x334155,
+              fontWeight: "600",
+            }));
+            label.x = Math.min(width - margin.right - label.width, x + 4);
+            label.y = margin.top + 2;
+            app.stage.addChild(label);
+          }
+        }
+      }
+
       if (showLegLabels) {
-        const legs = buildVisibleLegs(visible);
-        legs.forEach((leg, idx) => {
-          const left = margin.left + leg.startIdx * slot + slot * 0.1;
-          const right = margin.left + (leg.endIdx + 1) * slot - slot * 0.1;
-          const top = toY(leg.high);
-          const bottom = toY(leg.low);
+        const visibleLegs = legs.filter((leg) => leg.endIdx >= start && leg.startIdx <= end);
+        visibleLegs.forEach((leg) => {
+          const clippedStart = Math.max(start, leg.startIdx);
+          const clippedEnd = Math.min(end, leg.endIdx);
+          const localStart = clippedStart - start;
+          const localEnd = clippedEnd - start;
+          let segmentHigh = Number.NEGATIVE_INFINITY;
+          let segmentLow = Number.POSITIVE_INFINITY;
+          for (let i = clippedStart; i <= clippedEnd; i += 1) {
+            segmentHigh = Math.max(segmentHigh, candles[i].high);
+            segmentLow = Math.min(segmentLow, candles[i].low);
+          }
+          const left = margin.left + localStart * slot + slot * 0.1;
+          const right = margin.left + (localEnd + 1) * slot - slot * 0.1;
+          const top = toY(segmentHigh);
+          const bottom = toY(segmentLow);
           const widthPx = Math.max(2, right - left);
           const heightPx = Math.max(2, bottom - top);
           const lineColor = leg.direction === "bull" ? 0x0f766e : 0xb91c1c;
@@ -719,7 +1099,7 @@ export default function RuntimePixiChart({
           box.endFill();
           app.stage.addChild(box);
 
-          const label = new Text(`Leg ${idx + 1}`, new TextStyle({
+          const label = new Text(`Leg ${leg.legId}`, new TextStyle({
             fontFamily: "ui-sans-serif, system-ui, sans-serif",
             fontSize: 10,
             fill: lineColor,
@@ -757,6 +1137,54 @@ export default function RuntimePixiChart({
           label.x = margin.left + 4;
           label.y = Math.max(margin.top + 2, y - 14);
           app.stage.addChild(label);
+        }
+
+        if (candidateLevels) {
+          const drawDashed = (y: number, color: number) => {
+            const dashed = new Graphics();
+            dashed.lineStyle(1, color, 0.9);
+            const segment = 7;
+            const gap = 4;
+            for (let x = margin.left; x < width - margin.right; x += segment + gap) {
+              const x2 = Math.min(width - margin.right, x + segment);
+              dashed.moveTo(x, y);
+              dashed.lineTo(x2, y);
+            }
+            app.stage.addChild(dashed);
+          };
+
+          const continuationColor = candidateLevels.continuationDirection === "bull" ? 0x0f766e : 0xb91c1c;
+          const reversalColor = candidateLevels.reversalDirection === "bull" ? 0x0f766e : 0xb91c1c;
+          const yCont = toY(candidateLevels.continuationPrice);
+          const yRev = toY(candidateLevels.reversalPrice);
+          drawDashed(yCont, continuationColor);
+          drawDashed(yRev, reversalColor);
+
+          const contLabel = new Text(
+            `Cont ${candidateLevels.continuationDirection}: ${candidateLevels.continuationPrice.toFixed(5)}`,
+            new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 10,
+              fill: continuationColor,
+              fontWeight: "600",
+            })
+          );
+          contLabel.x = margin.left + 4;
+          contLabel.y = Math.max(margin.top + 2, yCont - 14);
+          app.stage.addChild(contLabel);
+
+          const revLabel = new Text(
+            `Rev ${candidateLevels.reversalDirection}: ${candidateLevels.reversalPrice.toFixed(5)}`,
+            new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 10,
+              fill: reversalColor,
+              fontWeight: "600",
+            })
+          );
+          revLabel.x = margin.left + 4;
+          revLabel.y = Math.max(margin.top + 16, yRev + 2);
+          app.stage.addChild(revLabel);
         }
       }
 
@@ -801,7 +1229,7 @@ export default function RuntimePixiChart({
     };
 
     void draw();
-  }, [appReadyTick, candles, continuationLevel, crosshair, height, range, timeframeMin, width]);
+  }, [appReadyTick, candles, candidateLevels, continuationLevel, crosshair, height, legs, liveBoundaryIso, range, timeframeMin, width]);
 
   return (
     <div className="relative rounded-md border bg-slate-50 p-2">
@@ -819,7 +1247,7 @@ export default function RuntimePixiChart({
       <div ref={hostRef} className="w-full rounded border border-slate-200" style={{ height }} />
       <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
         <span>
-          {(range ? range.end - range.start + 1 : candles.length)}/{candles.length} bars | Ctrl+wheel zoom | drag pan
+          {(range ? range.end - range.start + 1 : candles.length)}/{candles.length} bars | Ctrl+wheel zoom X | drag pan X | drag right scale zoom Y
         </span>
         <span>Source: ws+runtime ({symbol}) | ws ticks: {wsTicks}</span>
       </div>
@@ -857,3 +1285,11 @@ export default function RuntimePixiChart({
     </div>
   );
 }
+
+
+
+
+
+
+
+

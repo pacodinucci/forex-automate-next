@@ -277,6 +277,9 @@ function RuntimeStateCard({
                 continuationLevel={continuationLevel}
                 livePrice={livePrice}
                 liveTimestamp={liveTimestamp}
+                showLegLabels={isLegContinuationM5M1}
+                overlayStructureFromTimeframe={isLegContinuationM5M1 ? setupTimeframeLabel : undefined}
+                overlayStructureCandlesFallback={isLegContinuationM5M1 ? legContinuationSetupCandles : []}
               />
               <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
                 <div>Stage: {currentStage}</div>

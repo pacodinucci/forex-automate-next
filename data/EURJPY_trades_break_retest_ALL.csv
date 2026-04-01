@@ -1,0 +1,2 @@
+symbol,pattern_type,setup_time,level,breakout_time,deadline,side,entry_time,entry,exit_time,exit,result,retests_seen,entry_mode_assumption,pnl_points
+EURJPY,peak,2025-05-01 20:00:00+00:00,164.456,2025-05-02 00:15:00+00:00,2025-05-02 04:00:00+00:00,buy,2025-05-02 00:30:00+00:00,164.529,2025-05-02 01:00:00+00:00,164.429,SL,1,close_of_retest_candle,-99.99999999999432

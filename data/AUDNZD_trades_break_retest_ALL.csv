@@ -1,0 +1,3 @@
+symbol,pattern_type,setup_time,level,breakout_time,deadline,side,entry_time,entry,exit_time,exit,result,retests_seen,entry_mode_assumption,pnl_points
+AUDNZD,peak,2025-05-01 20:00:00+00:00,1.081,2025-05-02 00:15:00+00:00,2025-05-02 04:00:00+00:00,buy,2025-05-02 01:00:00+00:00,1.08112,2025-05-02 03:15:00+00:00,1.0801200000000002,SL,1,close_of_retest_candle,-99.99999999998897
+AUDNZD,peak,2025-06-18 12:00:00+00:00,1.07888,2025-06-18 17:30:00+00:00,2025-06-18 20:00:00+00:00,buy,2025-06-18 18:00:00+00:00,1.07895,2025-06-18 21:00:00+00:00,1.0779500000000002,SL,1,close_of_retest_candle,-99.99999999998897

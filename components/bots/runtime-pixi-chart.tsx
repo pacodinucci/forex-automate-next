@@ -23,7 +23,9 @@ type Props = {
   tradeMarkers?: TradeMarker[];
   selectedTradeHighlight?: SelectedTradeHighlight | null;
   onDeselectSelectedTrade?: () => void;
+  onLegBoxClick?: (leg: LegClickPayload) => void;
   focusTimeUtc?: string | null;
+  focusRangeUtc?: FocusRangeUtc | null;
   movingAverages?: RuntimeMovingAverageConfig[];
   dataMode?: "live" | "historical";
   useWebSocket?: boolean;
@@ -81,6 +83,8 @@ type TradeMarker = {
   id: string;
   time_utc: string;
   price: number;
+  entry_price?: number;
+  entry_time_utc?: string;
   side?: "buy" | "sell" | "unknown";
   kind?: "entry" | "exit";
   result?: string;
@@ -93,6 +97,19 @@ type SelectedTradeHighlight = {
   entry?: number;
   exit?: number;
   side?: "buy" | "sell" | "unknown";
+};
+
+type FocusRangeUtc = {
+  startTimeUtc: string;
+  endExclusiveTimeUtc: string;
+};
+
+type LegClickPayload = {
+  legId: number;
+  direction: "bull" | "bear";
+  startTimeUtc: string;
+  endTimeUtc: string;
+  endExclusiveTimeUtc: string;
 };
 
 export type RuntimeMovingAverageConfig = {
@@ -469,6 +486,25 @@ function mapLegsToTarget(
   return out;
 }
 
+function findCandleIndexForTime(candles: Candle[], targetMs: number) {
+  if (candles.length === 0 || Number.isNaN(targetMs)) return -1;
+  const times = candles.map((candle) => Date.parse(candle.time_utc));
+  if (times.some((time) => Number.isNaN(time))) return -1;
+
+  const idx = lowerBound(times, targetMs);
+  if (idx <= 0) return 0;
+  if (idx >= times.length) return times.length - 1;
+
+  const currentStart = times[idx];
+  if (currentStart === targetMs) return idx;
+
+  const prevStart = times[idx - 1];
+  if (prevStart <= targetMs && targetMs < currentStart) return idx - 1;
+
+  // Fallback to the closest start timestamp if the series has irregular gaps.
+  return Math.abs(targetMs - prevStart) <= Math.abs(currentStart - targetMs) ? idx - 1 : idx;
+}
+
 function normalizeSymbolKey(value: string | undefined | null) {
   return String(value ?? "")
     .trim()
@@ -495,7 +531,9 @@ export default function RuntimePixiChart({
   tradeMarkers = [],
   selectedTradeHighlight = null,
   onDeselectSelectedTrade,
+  onLegBoxClick,
   focusTimeUtc = null,
+  focusRangeUtc = null,
   movingAverages = [],
   dataMode = "live",
   useWebSocket = true,
@@ -503,35 +541,48 @@ export default function RuntimePixiChart({
   const DEFAULT_VISIBLE_BARS_BASE = 20;
   const ZOOM_IN_FACTOR = 0.84;
   const ZOOM_OUT_FACTOR = 1 / ZOOM_IN_FACTOR;
-  const PAN_SENSITIVITY = 1.9;
-  const PAN_ACCEL_MAX = 2.2;
+  const PAN_SENSITIVITY = 1.0;
   const Y_ZOOM_STEP = 0.008;
-  const Y_ZOOM_MIN = 0.4;
-  const Y_ZOOM_MAX = 6.0;
+  const Y_ZOOM_EPSILON = 1e-9;
   const RIGHT_OFFSET_DEFAULT = 2.5;
-  const RIGHT_OFFSET_MIN = 0;
-  const RIGHT_OFFSET_MAX = 40;
-  const RIGHT_OFFSET_DRAG_PX_PER_BAR = 26;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const appRef = useRef<import("pixi.js").Application | null>(null);
   const drawLayoutRef = useRef<DrawLayout | null>(null);
   const xGeometryRef = useRef<XGeometry | null>(null);
   const rangeRef = useRef<{ start: number; end: number } | null>(null);
-  const draggingRef = useRef<{ active: boolean; x: number; y: number; ts: number }>({ active: false, x: 0, y: 0, ts: 0 });
-  const yScaleDragRef = useRef<{ active: boolean; y: number; zoom: number; anchorRatio: number; anchorPrice: number } | null>(null);
-  const rightOffsetDragRef = useRef<{ active: boolean; x: number; offsetBars: number } | null>(null);
+  const draggingRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    originRange: { start: number; end: number } | null;
+    originCenterPrice: number | null;
+  }>({ active: false, startX: 0, startY: 0, originRange: null, originCenterPrice: null });
+  const yScaleDragRef = useRef<{ active: boolean; y: number; zoom: number; centerPrice: number } | null>(null);
   const yScaleAnchorRef = useRef<{ ratio: number; price: number } | null>(null);
   const yScaleMetaRef = useRef<{ pTop: number; pRange: number; marginTop: number; innerHeight: number } | null>(null);
   const userInteractedRef = useRef(false);
   const appliedOverlaySnapshotRef = useRef<string>("");
   const lastFocusTimeRef = useRef<string>("");
+  const lastFocusRangeRef = useRef<string>("");
+  const yCenterPriceRef = useRef<number | null>(null);
+  const yZoomRef = useRef(1);
+  const interactionRafRef = useRef<number | null>(null);
+  const pendingRangeRef = useRef<{ start: number; end: number } | null>(null);
+  const pendingYCenterPriceRef = useRef<number | null>(null);
+  const pendingYZoomRef = useRef<number | null>(null);
+  const pendingCrosshairRef = useRef<{ pending: boolean; value: { x: number; y: number } | null }>({
+    pending: false,
+    value: null,
+  });
   const selectedHighlightBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const clickableLegBoxesRef = useRef<Array<{ x: number; y: number; w: number; h: number; leg: LegClickPayload }>>([]);
   const highlightClickRef = useRef<{
     pending: boolean;
     startX: number;
     startY: number;
-    startedInBox: boolean;
-  }>({ pending: false, startX: 0, startY: 0, startedInBox: false });
+    startedInSelectedBox: boolean;
+    startedInLegBox: LegClickPayload | null;
+  }>({ pending: false, startX: 0, startY: 0, startedInSelectedBox: false, startedInLegBox: null });
 
   const [width, setWidth] = useState(900);
   const [appReadyTick, setAppReadyTick] = useState(0);
@@ -635,10 +686,52 @@ export default function RuntimePixiChart({
       })
       .filter((series) => series.values.some((value) => typeof value === "number"));
   }, [candles, movingAverages]);
+  const yAutoDomain = useMemo(() => {
+    const prices: number[] = [];
+    for (const candle of candles) {
+      prices.push(candle.low, candle.high);
+    }
+    for (const ma of movingAverageSeries) {
+      for (const value of ma.values) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          prices.push(value);
+        }
+      }
+    }
+    if (typeof continuationLevel === "number" && Number.isFinite(continuationLevel)) {
+      prices.push(continuationLevel);
+    }
+    if (breakLevel) {
+      prices.push(breakLevel.price);
+    }
+    if (candidateLevels) {
+      prices.push(candidateLevels.continuationPrice, candidateLevels.reversalPrice);
+    }
+
+    if (prices.length === 0) {
+      return { baseTop: 1, baseBottom: 0, baseRange: 1 };
+    }
+
+    const max = Math.max(...prices);
+    const min = Math.min(...prices);
+    const baseRange = Math.max(max - min, 0.00002);
+    const basePad = Math.max(baseRange * 0.1, 0.00002);
+    const baseTop = max + basePad;
+    const baseBottom = min - basePad;
+    return { baseTop, baseBottom, baseRange: Math.max(baseTop - baseBottom, 0.00002) };
+  }, [breakLevel, candidateLevels, candles, continuationLevel, movingAverageSeries]);
 
   useEffect(() => {
     rangeRef.current = range;
   }, [range]);
+
+  useEffect(() => {
+    yCenterPriceRef.current = yCenterPrice;
+  }, [yCenterPrice]);
+
+  useEffect(() => {
+    yZoomRef.current = yZoom;
+  }, [yZoom]);
 
   useEffect(() => {
     userInteractedRef.current = false;
@@ -647,6 +740,13 @@ export default function RuntimePixiChart({
     setYCenterPrice(null);
     yScaleAnchorRef.current = null;
     appliedOverlaySnapshotRef.current = "";
+    lastFocusTimeRef.current = "";
+    lastFocusRangeRef.current = "";
+    pendingRangeRef.current = null;
+    pendingYCenterPriceRef.current = null;
+    pendingYZoomRef.current = null;
+    pendingCrosshairRef.current.pending = false;
+    pendingCrosshairRef.current.value = null;
   }, [dataMode, symbol, timeframeLabel]);
 
   useEffect(() => {
@@ -734,6 +834,41 @@ export default function RuntimePixiChart({
     if (!app) return;
     const canvas = app.view as HTMLCanvasElement;
 
+    const applyPendingInteraction = () => {
+      interactionRafRef.current = null;
+
+      if (pendingCrosshairRef.current.pending) {
+        setCrosshair(pendingCrosshairRef.current.value);
+        pendingCrosshairRef.current.pending = false;
+      }
+
+      if (pendingYZoomRef.current !== null) {
+        const nextZoom = pendingYZoomRef.current;
+        pendingYZoomRef.current = null;
+        setYZoom((prev) => (Math.abs(prev - nextZoom) < 1e-9 ? prev : nextZoom));
+      }
+
+      if (pendingYCenterPriceRef.current !== null) {
+        const nextCenter = pendingYCenterPriceRef.current;
+        pendingYCenterPriceRef.current = null;
+        setYCenterPrice((prev) => (prev !== null && Math.abs(prev - nextCenter) < 1e-9 ? prev : nextCenter));
+      }
+
+      if (pendingRangeRef.current) {
+        const next = pendingRangeRef.current;
+        pendingRangeRef.current = null;
+        setRange((current) => {
+          if (current && current.start === next.start && current.end === next.end) return current;
+          return next;
+        });
+      }
+    };
+
+    const scheduleInteractionFlush = () => {
+      if (interactionRafRef.current !== null) return;
+      interactionRafRef.current = requestAnimationFrame(applyPendingInteraction);
+    };
+
     const applyZoom = (factor: number, anchorRatio: number) => {
       const current = rangeRef.current;
       if (!current || candles.length <= 2) return;
@@ -772,137 +907,149 @@ export default function RuntimePixiChart({
     const onMouseDown = (event: MouseEvent) => {
       userInteractedRef.current = true;
       const activeBox = selectedHighlightBoxRef.current;
-      const startedInBox = Boolean(
+      const startedInSelectedBox = Boolean(
         activeBox &&
         event.offsetX >= activeBox.x &&
         event.offsetX <= activeBox.x + activeBox.w &&
         event.offsetY >= activeBox.y &&
         event.offsetY <= activeBox.y + activeBox.h
       );
+      const startedInLegBox = clickableLegBoxesRef.current.find((item) =>
+        event.offsetX >= item.x &&
+        event.offsetX <= item.x + item.w &&
+        event.offsetY >= item.y &&
+        event.offsetY <= item.y + item.h
+      )?.leg ?? null;
       highlightClickRef.current = {
         pending: true,
         startX: event.clientX,
         startY: event.clientY,
-        startedInBox,
+        startedInSelectedBox,
+        startedInLegBox,
       };
-      if (startedInBox) {
+      if (startedInSelectedBox || startedInLegBox) {
         canvas.style.cursor = "pointer";
         return;
       }
 
       const layout = drawLayoutRef.current;
-      const xGeometry = xGeometryRef.current;
-      const inRightGap = Boolean(
-        xGeometry &&
-        event.offsetX >= xGeometry.gapStartX &&
-        event.offsetX <= xGeometry.plotEndX &&
-        event.offsetY >= xGeometry.plotTopY &&
-        event.offsetY <= xGeometry.plotBottomY
-      );
-      if (inRightGap) {
-        rightOffsetDragRef.current = {
-          active: true,
-          x: event.clientX,
-          offsetBars: rightOffsetBars,
-        };
-        canvas.style.cursor = "ew-resize";
-        return;
-      }
 
-      const inPriceScale = Boolean(layout && event.offsetX >= layout.marginLeft + layout.innerWidth);
-      if (inPriceScale) {
+      const inLeftScale = Boolean(layout && event.offsetX <= layout.marginLeft);
+      const inRightScale = Boolean(layout && event.offsetX >= layout.marginLeft + layout.innerWidth);
+      const inVerticalScale = inLeftScale || inRightScale;
+      if (inVerticalScale) {
         const yMeta = yScaleMetaRef.current;
         if (yMeta) {
-          const clampedY = Math.max(yMeta.marginTop, Math.min(yMeta.marginTop + yMeta.innerHeight, event.offsetY));
-          const ratio = (clampedY - yMeta.marginTop) / yMeta.innerHeight;
-          const anchorPrice = yMeta.pTop - ratio * yMeta.pRange;
+          const centerPrice = yCenterPriceRef.current ?? (yMeta.pTop - yMeta.pRange / 2);
           yScaleDragRef.current = {
             active: true,
             y: event.clientY,
-            zoom: yZoom,
-            anchorRatio: ratio,
-            anchorPrice,
+            zoom: yZoomRef.current,
+            centerPrice,
           };
-          yScaleAnchorRef.current = { ratio, price: anchorPrice };
+          yScaleAnchorRef.current = null;
+          pendingYCenterPriceRef.current = centerPrice;
           canvas.style.cursor = "ns-resize";
           return;
         }
       }
 
-      draggingRef.current = { active: true, x: event.clientX, y: event.clientY, ts: performance.now() };
+      const originRange = rangeRef.current;
+      const yMeta = yScaleMetaRef.current;
+      const originCenter = yCenterPriceRef.current ?? (yMeta ? (yMeta.pTop - yMeta.pRange / 2) : null);
+      draggingRef.current = {
+        active: true,
+        startX: event.clientX,
+        startY: event.clientY,
+        originRange: originRange ? { ...originRange } : null,
+        originCenterPrice: originCenter,
+      };
       canvas.style.cursor = "grabbing";
     };
 
     const onMouseMove = (event: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      setCrosshair({ x: event.clientX - rect.left, y: event.clientY - rect.top });
-      if (highlightClickRef.current.pending && highlightClickRef.current.startedInBox) {
+      pendingCrosshairRef.current.pending = true;
+      pendingCrosshairRef.current.value = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      scheduleInteractionFlush();
+      if (
+        highlightClickRef.current.pending &&
+        (highlightClickRef.current.startedInSelectedBox || highlightClickRef.current.startedInLegBox)
+      ) {
         const dx = event.clientX - highlightClickRef.current.startX;
         const dy = event.clientY - highlightClickRef.current.startY;
         const moved = Math.hypot(dx, dy) > 4;
         if (moved) {
           highlightClickRef.current.pending = false;
-          draggingRef.current = { active: true, x: event.clientX, y: event.clientY, ts: performance.now() };
+          const originRange = rangeRef.current;
+          const yMeta = yScaleMetaRef.current;
+          const originCenter = yCenterPriceRef.current ?? (yMeta ? (yMeta.pTop - yMeta.pRange / 2) : null);
+          draggingRef.current = {
+            active: true,
+            startX: event.clientX,
+            startY: event.clientY,
+            originRange: originRange ? { ...originRange } : null,
+            originCenterPrice: originCenter,
+          };
           canvas.style.cursor = "grabbing";
         }
-      }
-
-      if (rightOffsetDragRef.current?.active) {
-        const drag = rightOffsetDragRef.current;
-        const dx = event.clientX - drag.x;
-        const next = Math.max(
-          RIGHT_OFFSET_MIN,
-          Math.min(RIGHT_OFFSET_MAX, drag.offsetBars + dx / RIGHT_OFFSET_DRAG_PX_PER_BAR)
-        );
-        setRightOffsetBars(Math.round(next * 10) / 10);
-        canvas.style.cursor = "ew-resize";
-        return;
       }
 
       if (yScaleDragRef.current?.active) {
         const scale = yScaleDragRef.current;
         const dy = event.clientY - scale.y;
         const factor = Math.exp(-dy * Y_ZOOM_STEP);
-        const nextZoom = Math.max(Y_ZOOM_MIN, Math.min(Y_ZOOM_MAX, scale.zoom * factor));
-        yScaleAnchorRef.current = { ratio: scale.anchorRatio, price: scale.anchorPrice };
-        setYZoom(nextZoom);
+        const nextZoom = Math.max(Y_ZOOM_EPSILON, scale.zoom * factor);
+        yScaleAnchorRef.current = null;
+        pendingYCenterPriceRef.current = scale.centerPrice;
+        pendingYZoomRef.current = nextZoom;
+        scheduleInteractionFlush();
         canvas.style.cursor = "ns-resize";
         return;
       }
 
       const layout = drawLayoutRef.current;
-      const isPriceScaleHover = Boolean(layout && event.offsetX >= layout.marginLeft + layout.innerWidth);
-      const xGeometry = xGeometryRef.current;
-      const isRightGapHover = Boolean(
-        xGeometry &&
-        event.offsetX >= xGeometry.gapStartX &&
-        event.offsetX <= xGeometry.plotEndX &&
-        event.offsetY >= xGeometry.plotTopY &&
-        event.offsetY <= xGeometry.plotBottomY
+      const isPriceScaleHover = Boolean(
+        layout && (event.offsetX <= layout.marginLeft || event.offsetX >= layout.marginLeft + layout.innerWidth)
+      );
+      const activeBox = selectedHighlightBoxRef.current;
+      const isSelectedBoxHover = Boolean(
+        activeBox &&
+        event.offsetX >= activeBox.x &&
+        event.offsetX <= activeBox.x + activeBox.w &&
+        event.offsetY >= activeBox.y &&
+        event.offsetY <= activeBox.y + activeBox.h
+      );
+      const isLegBoxHover = clickableLegBoxesRef.current.some((item) =>
+        event.offsetX >= item.x &&
+        event.offsetX <= item.x + item.w &&
+        event.offsetY >= item.y &&
+        event.offsetY <= item.y + item.h
       );
       if (!draggingRef.current.active) {
-        canvas.style.cursor = isRightGapHover ? "ew-resize" : (isPriceScaleHover ? "ns-resize" : "crosshair");
+        canvas.style.cursor = isSelectedBoxHover || isLegBoxHover
+          ? "pointer"
+          : (isPriceScaleHover ? "ns-resize" : "crosshair");
         return;
       }
-      const current = rangeRef.current;
+      const current = draggingRef.current.originRange ?? pendingRangeRef.current ?? rangeRef.current;
       if (!layout || !current) return;
 
-      const nowTs = performance.now();
-      const dx = event.clientX - draggingRef.current.x;
-      const dy = event.clientY - draggingRef.current.y;
-      const dt = Math.max(1, nowTs - draggingRef.current.ts);
-      draggingRef.current = { ...draggingRef.current, x: event.clientX, y: event.clientY, ts: nowTs };
+      const dx = event.clientX - draggingRef.current.startX;
+      const dy = event.clientY - draggingRef.current.startY;
       const visible = current.end - current.start + 1;
-      const pxPerMs = Math.abs(dx) / dt;
-      const accel = Math.min(PAN_ACCEL_MAX, 1 + pxPerMs * 3.5);
-      const shift = Math.round(((-dx / layout.innerWidth) * visible) * PAN_SENSITIVITY * accel);
+      const shift = Math.round(((-dx / layout.innerWidth) * visible) * PAN_SENSITIVITY);
       const yMeta = yScaleMetaRef.current;
       if (yMeta && dy !== 0) {
         const priceDelta = (dy / yMeta.innerHeight) * yMeta.pRange;
         yScaleAnchorRef.current = null;
-        setYCenterPrice((prev) => (prev ?? (yMeta.pTop - yMeta.pRange / 2)) + priceDelta);
+        const originCenter = draggingRef.current.originCenterPrice ?? (yMeta.pTop - yMeta.pRange / 2);
+        pendingYCenterPriceRef.current = originCenter + priceDelta;
       }
-      if (shift === 0) return;
+      if (shift === 0) {
+        scheduleInteractionFlush();
+        return;
+      }
 
       let start = current.start + shift;
       let end = current.end + shift;
@@ -914,26 +1061,37 @@ export default function RuntimePixiChart({
         end = candles.length - 1;
         start = Math.max(0, end - visible + 1);
       }
-      setRange({ start, end });
+      pendingRangeRef.current = { start, end };
+      scheduleInteractionFlush();
     };
 
     const onMouseUp = () => {
-      if (highlightClickRef.current.pending && highlightClickRef.current.startedInBox) {
+      if (interactionRafRef.current !== null) {
+        cancelAnimationFrame(interactionRafRef.current);
+        interactionRafRef.current = null;
+      }
+      applyPendingInteraction();
+      if (highlightClickRef.current.pending && highlightClickRef.current.startedInSelectedBox) {
         onDeselectSelectedTrade?.();
       }
+      if (highlightClickRef.current.pending && highlightClickRef.current.startedInLegBox) {
+        onLegBoxClick?.(highlightClickRef.current.startedInLegBox);
+      }
       highlightClickRef.current.pending = false;
-      highlightClickRef.current.startedInBox = false;
+      highlightClickRef.current.startedInSelectedBox = false;
+      highlightClickRef.current.startedInLegBox = null;
       draggingRef.current.active = false;
+      draggingRef.current.originRange = null;
+      draggingRef.current.originCenterPrice = null;
       if (yScaleDragRef.current) {
         yScaleDragRef.current.active = false;
-      }
-      if (rightOffsetDragRef.current) {
-        rightOffsetDragRef.current.active = false;
       }
       canvas.style.cursor = "crosshair";
     };
     const onMouseLeave = () => {
-      setCrosshair(null);
+      pendingCrosshairRef.current.pending = true;
+      pendingCrosshairRef.current.value = null;
+      scheduleInteractionFlush();
       canvas.style.cursor = "crosshair";
     };
 
@@ -949,13 +1107,18 @@ export default function RuntimePixiChart({
       canvas.removeEventListener("mousemove", onMouseMove);
       canvas.removeEventListener("mouseleave", onMouseLeave);
       window.removeEventListener("mouseup", onMouseUp);
+      if (interactionRafRef.current !== null) {
+        cancelAnimationFrame(interactionRafRef.current);
+        interactionRafRef.current = null;
+      }
     };
-  }, [appReadyTick, candles.length, rightOffsetBars, yZoom]);
+  }, [appReadyTick, candles.length, onDeselectSelectedTrade, onLegBoxClick]);
 
   function zoomByFactor(factor: number) {
     const current = rangeRef.current;
     if (!current || candles.length <= 2) return;
     userInteractedRef.current = true;
+    pendingRangeRef.current = null;
     const ratio = 0.5;
     const anchor = current.start + Math.round((current.end - current.start) * ratio);
     const visible = current.end - current.start + 1;
@@ -976,6 +1139,9 @@ export default function RuntimePixiChart({
 
   function resetView() {
     userInteractedRef.current = false;
+    pendingRangeRef.current = null;
+    pendingYCenterPriceRef.current = null;
+    pendingYZoomRef.current = null;
     setYZoom(1);
     setYCenterPrice(null);
     yScaleAnchorRef.current = null;
@@ -983,6 +1149,26 @@ export default function RuntimePixiChart({
     const end = candles.length - 1;
     const visible = Math.min(defaultVisibleBars, candles.length);
     setRange({ start: Math.max(0, end - visible + 1), end });
+  }
+
+  function centerChart() {
+    // Center only Y axis based on currently visible candles; keep X range and zoom untouched.
+    if (candles.length === 0) return;
+    const current = rangeRef.current;
+    const start = current ? Math.max(0, Math.min(current.start, candles.length - 1)) : 0;
+    const end = current ? Math.max(start, Math.min(current.end, candles.length - 1)) : (candles.length - 1);
+
+    let high = Number.NEGATIVE_INFINITY;
+    let low = Number.POSITIVE_INFINITY;
+    for (let idx = start; idx <= end; idx += 1) {
+      high = Math.max(high, candles[idx].high);
+      low = Math.min(low, candles[idx].low);
+    }
+    if (!Number.isFinite(high) || !Number.isFinite(low)) return;
+
+    pendingYCenterPriceRef.current = null;
+    yScaleAnchorRef.current = null;
+    setYCenterPrice((high + low) / 2);
   }
 
   useEffect(() => {
@@ -1018,6 +1204,60 @@ export default function RuntimePixiChart({
   }, [candles, defaultVisibleBars, focusTimeUtc]);
 
   useEffect(() => {
+    if (!focusRangeUtc || candles.length === 0) return;
+    const signature = `${focusRangeUtc.startTimeUtc}|${focusRangeUtc.endExclusiveTimeUtc}`;
+    if (lastFocusRangeRef.current === signature) return;
+
+    const startMs = Date.parse(focusRangeUtc.startTimeUtc);
+    const endExclusiveMs = Date.parse(focusRangeUtc.endExclusiveTimeUtc);
+    if (Number.isNaN(startMs) || Number.isNaN(endExclusiveMs)) return;
+    if (endExclusiveMs <= startMs) return;
+
+    const startIdx = candles.findIndex((candle) => {
+      const candleMs = Date.parse(candle.time_utc);
+      return !Number.isNaN(candleMs) && candleMs >= startMs;
+    });
+    if (startIdx < 0) return;
+
+    let endIdx = -1;
+    for (let idx = startIdx; idx < candles.length; idx += 1) {
+      const candleMs = Date.parse(candles[idx].time_utc);
+      if (Number.isNaN(candleMs)) continue;
+      if (candleMs < endExclusiveMs) {
+        endIdx = idx;
+      } else {
+        break;
+      }
+    }
+    if (endIdx < startIdx) endIdx = startIdx;
+
+    const segment = endIdx - startIdx + 1;
+    const pad = Math.max(2, Math.ceil(segment * 0.25));
+    let nextStart = Math.max(0, startIdx - pad);
+    let nextEnd = Math.min(candles.length - 1, endIdx + pad);
+
+    if (nextEnd - nextStart < segment) {
+      nextEnd = Math.min(candles.length - 1, nextStart + segment - 1);
+      nextStart = Math.max(0, nextEnd - segment + 1);
+    }
+
+    userInteractedRef.current = true;
+    setRange({ start: nextStart, end: nextEnd });
+    let segmentHigh = Number.NEGATIVE_INFINITY;
+    let segmentLow = Number.POSITIVE_INFINITY;
+    for (let idx = startIdx; idx <= endIdx; idx += 1) {
+      segmentHigh = Math.max(segmentHigh, candles[idx].high);
+      segmentLow = Math.min(segmentLow, candles[idx].low);
+    }
+    if (Number.isFinite(segmentHigh) && Number.isFinite(segmentLow)) {
+      pendingYCenterPriceRef.current = null;
+      yScaleAnchorRef.current = null;
+      setYCenterPrice((segmentHigh + segmentLow) / 2);
+    }
+    lastFocusRangeRef.current = signature;
+  }, [candles, focusRangeUtc]);
+
+  useEffect(() => {
     const app = appRef.current;
     if (!app) return;
 
@@ -1028,8 +1268,9 @@ export default function RuntimePixiChart({
       app.renderer.resize(width, height);
       app.stage.removeChildren();
       selectedHighlightBoxRef.current = null;
+      clickableLegBoxesRef.current = [];
 
-      const margin = { left: 56, right: 58, top: 12, bottom: 26 };
+      const margin = { left: 6, right: 58, top: 12, bottom: 26 };
       const innerWidth = width - margin.left - margin.right;
       const innerHeight = height - margin.top - margin.bottom;
 
@@ -1057,6 +1298,7 @@ export default function RuntimePixiChart({
       const start = Math.max(0, Math.min(range.start, candles.length - 1));
       const end = Math.max(start, Math.min(range.end, candles.length - 1));
       const visible = candles.slice(start, end + 1);
+      const candleTimes = candles.map((candle) => Date.parse(candle.time_utc));
 
       drawLayoutRef.current = {
         marginLeft: margin.left,
@@ -1067,32 +1309,12 @@ export default function RuntimePixiChart({
         innerHeight,
       };
 
-      const prices = visible.flatMap((c) => [c.low, c.high]);
-      if (movingAverageSeries.length > 0) {
-        for (const ma of movingAverageSeries) {
-          for (let idx = start; idx <= end; idx += 1) {
-            const value = ma.values[idx];
-            if (typeof value === "number" && Number.isFinite(value)) {
-              prices.push(value);
-            }
-          }
-        }
-      }
-      if (typeof continuationLevel === "number" && Number.isFinite(continuationLevel)) prices.push(continuationLevel);
-      if (breakLevel) prices.push(breakLevel.price);
-      if (candidateLevels) {
-        prices.push(candidateLevels.continuationPrice, candidateLevels.reversalPrice);
-      }
-      const max = Math.max(...prices);
-      const min = Math.min(...prices);
-      const baseRange = Math.max(max - min, 0.00002);
-      const basePad = Math.max(baseRange * 0.1, 0.00002);
-      const baseTop = max + basePad;
-      const baseBottom = min - basePad;
-      const basePRange = Math.max(baseTop - baseBottom, 0.00002);
+      const baseTop = yAutoDomain.baseTop;
+      const baseBottom = yAutoDomain.baseBottom;
+      const basePRange = yAutoDomain.baseRange;
 
-      const clampedYZoom = Math.max(Y_ZOOM_MIN, Math.min(Y_ZOOM_MAX, yZoom));
-      const pRange = Math.max(basePRange / clampedYZoom, 0.00002);
+      const effectiveYZoom = Math.max(Y_ZOOM_EPSILON, yZoom);
+      const pRange = Math.max(basePRange / effectiveYZoom, Number.EPSILON);
       const anchor = yScaleAnchorRef.current;
       let pTop: number;
       if (anchor && yCenterPrice === null) {
@@ -1217,15 +1439,17 @@ export default function RuntimePixiChart({
       if (showLegLabels) {
         const visibleLegs = drawableLegs.filter((leg) => leg.drawEndIdx >= start && leg.drawStartIdx <= end);
         visibleLegs.forEach((leg) => {
-          const clippedStart = Math.max(start, leg.drawStartIdx);
-          const clippedEnd = Math.min(end, leg.drawEndIdx);
-          const localStart = clippedStart - start;
-          const localEnd = clippedEnd - start;
-          const left = margin.left + localStart * slot + slot * 0.1;
-          const right = margin.left + (localEnd + 1) * slot - slot * 0.1;
+          const fullStartIdx = Math.max(0, Math.min(candles.length - 1, leg.drawStartIdx));
+          const fullEndIdx = Math.max(fullStartIdx, Math.min(candles.length - 1, leg.drawEndIdx));
+          const drawStartIdx = Math.max(start, fullStartIdx);
+          const drawEndIdx = Math.min(end, fullEndIdx);
+          const localStart = drawStartIdx - start;
+          const localEnd = drawEndIdx - start;
+          const left = margin.left + localStart * slot;
+          const right = margin.left + (localEnd + 1) * slot;
           let segmentHigh = Number.NEGATIVE_INFINITY;
           let segmentLow = Number.POSITIVE_INFINITY;
-          for (let i = clippedStart; i <= clippedEnd; i += 1) {
+          for (let i = drawStartIdx; i <= drawEndIdx; i += 1) {
             segmentHigh = Math.max(segmentHigh, candles[i].high);
             segmentLow = Math.min(segmentLow, candles[i].low);
           }
@@ -1242,6 +1466,30 @@ export default function RuntimePixiChart({
           box.drawRect(left, top, widthPx, heightPx);
           box.endFill();
           app.stage.addChild(box);
+
+          const startCandle = candles[fullStartIdx];
+          const endCandle = candles[fullEndIdx];
+          if (startCandle && endCandle) {
+            const endMs = Date.parse(endCandle.time_utc);
+            const endExclusiveMs = Number.isNaN(endMs)
+              ? NaN
+              : endMs + Math.max(1, timeframeMin) * 60_000;
+            clickableLegBoxesRef.current.push({
+              x: left,
+              y: top,
+              w: widthPx,
+              h: heightPx,
+              leg: {
+                legId: leg.legId,
+                direction: leg.direction,
+                startTimeUtc: startCandle.time_utc,
+                endTimeUtc: endCandle.time_utc,
+                endExclusiveTimeUtc: Number.isNaN(endExclusiveMs)
+                  ? endCandle.time_utc
+                  : new Date(endExclusiveMs).toISOString(),
+              },
+            });
+          }
 
           const label = new Text(`Leg ${leg.legId}`, new TextStyle({
             fontFamily: "ui-sans-serif, system-ui, sans-serif",
@@ -1340,20 +1588,18 @@ export default function RuntimePixiChart({
         if (!Number.isNaN(startMs) && !Number.isNaN(endMsRaw)) {
           const rangeStartMs = Math.min(startMs, endMsRaw);
           const rangeEndMs = Math.max(startMs, endMsRaw);
+          const endExclusiveMs = rangeEndMs + Math.max(1, timeframeMin) * 60_000;
 
-          const startIdx = visible.findIndex((candle) => Date.parse(candle.time_utc) >= rangeStartMs);
-          const endIdx = visible.findIndex((candle) => Date.parse(candle.time_utc) >= rangeEndMs);
+          const startIdxAbs = Math.max(0, Math.min(candles.length - 1, lowerBound(candleTimes, rangeStartMs)));
+          const endIdxAbsRaw = lowerBound(candleTimes, endExclusiveMs) - 1;
+          const endIdxAbs = Math.max(startIdxAbs, Math.min(candles.length - 1, endIdxAbsRaw));
 
-          if (startIdx >= 0) {
-            const resolvedEndIdx = endIdx >= 0 ? endIdx : visible.length - 1;
-            const leftIdx = Math.max(0, Math.min(startIdx, resolvedEndIdx));
-            const rightIdx = Math.max(leftIdx, Math.min(visible.length - 1, resolvedEndIdx));
-
+          if (endIdxAbs >= start && startIdxAbs <= end) {
             let high = Number.NEGATIVE_INFINITY;
             let low = Number.POSITIVE_INFINITY;
-            for (let i = leftIdx; i <= rightIdx; i += 1) {
-              high = Math.max(high, visible[i].high);
-              low = Math.min(low, visible[i].low);
+            for (let i = startIdxAbs; i <= endIdxAbs; i += 1) {
+              high = Math.max(high, candles[i].high);
+              low = Math.min(low, candles[i].low);
             }
             if (typeof selectedTradeHighlight.entry === "number") {
               high = Math.max(high, selectedTradeHighlight.entry);
@@ -1367,6 +1613,10 @@ export default function RuntimePixiChart({
             if (Number.isFinite(high) && Number.isFinite(low)) {
               const bullish = selectedTradeHighlight.side === "buy";
               const color = bullish ? 0x0f766e : 0xb91c1c;
+              const drawStartIdx = Math.max(start, startIdxAbs);
+              const drawEndIdx = Math.min(end, endIdxAbs);
+              const leftIdx = drawStartIdx - start;
+              const rightIdx = drawEndIdx - start;
               const boxX = margin.left + leftIdx * slot;
               const boxW = Math.max(slot, (rightIdx - leftIdx + 1) * slot);
               const boxTop = toY(high);
@@ -1464,11 +1714,13 @@ export default function RuntimePixiChart({
           if (Number.isNaN(markerMs)) return;
           if (markerMs < visibleStartMs || markerMs > visibleEndMs) return;
 
-          const localIdx = visible.findIndex((candle) => Date.parse(candle.time_utc) >= markerMs);
-          if (localIdx < 0) return;
+          const absoluteIdx = findCandleIndexForTime(candles, markerMs);
+          if (absoluteIdx < 0 || absoluteIdx < start || absoluteIdx > end) return;
+          const localIdx = absoluteIdx - start;
+          const candleAtIdx = visible[localIdx];
+          if (!candleAtIdx) return;
 
           const x = margin.left + localIdx * slot + slot / 2;
-          const y = toY(marker.price);
           const bullish = marker.side === "buy";
           const resultText = String(marker.result ?? "").toUpperCase();
           const isProfit = marker.pnl_points !== undefined
@@ -1486,7 +1738,75 @@ export default function RuntimePixiChart({
                 : 0x475569
             : bullish
               ? 0x0f766e
-              : 0xb91c1c;
+              : marker.side === "sell"
+                ? 0xb91c1c
+                : 0x475569;
+
+          if (marker.kind === "entry") {
+            const entryPadding = 14;
+            const arrowHalf = 6;
+            const arrowHeight = 8;
+            const isSell = marker.side === "sell";
+            const anchorY = isSell
+              ? toY(candleAtIdx.high) - entryPadding
+              : toY(candleAtIdx.low) + entryPadding;
+            const tipY = isSell ? anchorY + arrowHeight : anchorY - arrowHeight;
+            const baseY = anchorY;
+
+            const arrow = new Graphics();
+            arrow.lineStyle(1.2, 0xffffff, 0.95);
+            arrow.beginFill(baseColor, 0.96);
+            arrow.moveTo(x, tipY);
+            arrow.lineTo(x - arrowHalf, baseY);
+            arrow.lineTo(x + arrowHalf, baseY);
+            arrow.lineTo(x, tipY);
+            arrow.endFill();
+            app.stage.addChild(arrow);
+            return;
+          }
+
+          const y = toY(marker.price);
+          if (marker.kind === "exit") {
+            const tickHalf = Math.max(5, candleW * 0.95);
+            const tick = new Graphics();
+            tick.lineStyle(2, baseColor, 0.98);
+            tick.moveTo(x - tickHalf, y);
+            tick.lineTo(x + tickHalf, y);
+            app.stage.addChild(tick);
+
+            if (typeof marker.entry_price === "number" && Number.isFinite(marker.entry_price)) {
+              const entryTimeMs = marker.entry_time_utc ? Date.parse(marker.entry_time_utc) : NaN;
+              const entryIdxAbs = Number.isNaN(entryTimeMs) ? -1 : findCandleIndexForTime(candles, entryTimeMs);
+              if (entryIdxAbs >= start && entryIdxAbs <= end) {
+                const entryLocalIdx = entryIdxAbs - start;
+                const entryX = margin.left + entryLocalIdx * slot + slot / 2;
+                const yEntry = toY(marker.entry_price);
+                const entryTickHalf = Math.max(4, candleW * 0.8);
+                const entryTick = new Graphics();
+                entryTick.lineStyle(1.6, 0x64748b, 0.95);
+                entryTick.moveTo(entryX - entryTickHalf, yEntry);
+                entryTick.lineTo(entryX + entryTickHalf, yEntry);
+                app.stage.addChild(entryTick);
+              }
+            }
+
+            const gap = 12;
+            const tradeWasBuy = marker.side === "buy";
+            const iconY = tradeWasBuy
+              ? toY(candleAtIdx.high) - gap
+              : toY(candleAtIdx.low) + gap;
+            const exitIcon = isProfit ? "√" : isLoss ? "×" : "•";
+            const exitLabel = new Text(exitIcon, new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 14,
+              fill: baseColor,
+              fontWeight: "700",
+            }));
+            exitLabel.x = x - exitLabel.width / 2;
+            exitLabel.y = iconY - exitLabel.height / 2;
+            app.stage.addChild(exitLabel);
+            return;
+          }
           const labelText = marker.kind === "exit"
             ? isProfit
               ? "P"
@@ -1593,6 +1913,8 @@ export default function RuntimePixiChart({
 
             const delta = hovered.close - hovered.open;
             const deltaPct = hovered.open !== 0 ? (delta / hovered.open) * 100 : 0;
+            const range = hovered.high - hovered.low;
+            const rangePct = hovered.open !== 0 ? (range / hovered.open) * 100 : 0;
             const deltaPositive = delta >= 0;
             const deltaStyle = new TextStyle({
               fontFamily: "ui-sans-serif, system-ui, sans-serif",
@@ -1600,7 +1922,7 @@ export default function RuntimePixiChart({
               fill: deltaPositive ? 0x0f766e : 0xb91c1c,
               fontWeight: "500",
             });
-            const deltaText = `${deltaPositive ? "+" : ""}${delta.toFixed(5)} (${deltaPositive ? "+" : ""}${deltaPct.toFixed(2)}%)`;
+            const deltaText = `${deltaPositive ? "+" : ""}${delta.toFixed(5)} (${deltaPositive ? "+" : ""}${deltaPct.toFixed(2)}%) | H-L ${rangePct.toFixed(2)}%`;
             const deltaLabel = new Text(deltaText, deltaStyle);
             deltaLabel.x = ohlcCursorX + 2;
             deltaLabel.y = margin.top + 4;
@@ -1678,12 +2000,21 @@ export default function RuntimePixiChart({
     };
 
     void draw();
-  }, [appReadyTick, breakLevel, candles, candidateLevels, continuationLevel, crosshair, drawableLegs, effectiveLivePrice, height, isHistorical, liveBoundaryIso, movingAverageSeries, range, rightOffsetBars, selectedTradeHighlight, timeframeMin, tradeMarkers, width, yCenterPrice, yZoom]);
+  }, [appReadyTick, breakLevel, candles, candidateLevels, crosshair, drawableLegs, effectiveLivePrice, height, isHistorical, liveBoundaryIso, movingAverageSeries, range, rightOffsetBars, selectedTradeHighlight, timeframeMin, tradeMarkers, width, yAutoDomain, yCenterPrice, yZoom]);
 
   return (
     <div className="relative rounded-md border bg-slate-50 p-2">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="text-sm font-semibold text-slate-800">{title} ({timeframeLabel})</div>
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-semibold text-slate-800">{title} ({timeframeLabel})</div>
+          <button
+            type="button"
+            onClick={centerChart}
+            className="inline-flex items-center rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+          >
+            Centrar
+          </button>
+        </div>
         <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white ${stageBadgeClass(stageLabel)}`}>
           {stageLabel}
         </span>
@@ -1696,7 +2027,7 @@ export default function RuntimePixiChart({
       <div ref={hostRef} className="w-full rounded border border-slate-200" style={{ height }} />
       <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
         <span>
-          {(range ? range.end - range.start + 1 : candles.length)}/{candles.length} bars | Ctrl+wheel zoom X | drag pan X/Y | drag right gap X | drag right scale zoom Y
+          {(range ? range.end - range.start + 1 : candles.length)}/{candles.length} bars | Ctrl+wheel zoom X | drag pan X/Y | drag right scale zoom Y
         </span>
         <span>
           {isHistorical

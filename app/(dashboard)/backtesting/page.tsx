@@ -145,7 +145,9 @@ export default function BacktestingPage() {
   const [playing, setPlaying] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
   const [focusTimeUtc, setFocusTimeUtc] = useState<string | null>(null);
+  const [m15FocusRangeUtc, setM15FocusRangeUtc] = useState<{ startTimeUtc: string; endExclusiveTimeUtc: string } | null>(null);
   const chartSectionRef = useRef<HTMLDivElement | null>(null);
+  const m15SectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const loadMeta = async () => {
@@ -301,11 +303,13 @@ export default function BacktestingPage() {
       setCursor(0);
       setSelectedTradeId(null);
       setFocusTimeUtc(null);
+      setM15FocusRangeUtc(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Error corriendo backtest";
       setError(message);
       setRun(null);
       setDetailRunM15(null);
+      setM15FocusRangeUtc(null);
     } finally {
       setLoadingRun(false);
     }
@@ -333,6 +337,8 @@ export default function BacktestingPage() {
         id: string;
         time_utc: string;
         price: number;
+        entry_price?: number;
+        entry_time_utc?: string;
         side: "buy" | "sell" | "unknown";
         kind: "entry" | "exit";
         result?: string;
@@ -361,6 +367,8 @@ export default function BacktestingPage() {
             id: `${trade.id}:exit`,
             time_utc: trade.exit_time,
             price: trade.exit,
+            entry_price: trade.entry,
+            entry_time_utc: trade.entry_time,
             side: trade.side,
             kind: "exit",
             result: trade.result,
@@ -385,6 +393,7 @@ export default function BacktestingPage() {
     setPlaying(false);
     setSelectedTradeId(trade.id);
     setFocusTimeUtc(jumpTime);
+    setM15FocusRangeUtc(null);
 
     chartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -418,6 +427,8 @@ export default function BacktestingPage() {
       id: string;
       time_utc: string;
       price: number;
+      entry_price?: number;
+      entry_time_utc?: string;
       side: "buy" | "sell" | "unknown";
       kind: "entry" | "exit";
       result?: string;
@@ -440,6 +451,8 @@ export default function BacktestingPage() {
         id: `${selectedTrade.id}:exit:selected`,
         time_utc: selectedTrade.exit_time,
         price: selectedTrade.exit,
+        entry_price: selectedTrade.entry,
+        entry_time_utc: selectedTrade.entry_time,
         side: selectedTrade.side,
         kind: "exit",
         result: selectedTrade.result,
@@ -692,6 +705,18 @@ export default function BacktestingPage() {
                 onDeselectSelectedTrade={() => {
                   setSelectedTradeId(null);
                   setFocusTimeUtc(null);
+                  setM15FocusRangeUtc(null);
+                }}
+                onLegBoxClick={(leg) => {
+                  if (!showM15DetailChart) return;
+                  setPlaying(false);
+                  setSelectedTradeId(null);
+                  setFocusTimeUtc(leg.startTimeUtc);
+                  setM15FocusRangeUtc({
+                    startTimeUtc: leg.startTimeUtc,
+                    endExclusiveTimeUtc: leg.endExclusiveTimeUtc,
+                  });
+                  m15SectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
               />
 
@@ -702,7 +727,7 @@ export default function BacktestingPage() {
           </Card>
 
           {showM15DetailChart ? (
-            <Card>
+            <Card ref={m15SectionRef}>
               <CardHeader>
                 <CardTitle>Detalle M15 (contexto de entrada/salida)</CardTitle>
               </CardHeader>
@@ -719,7 +744,7 @@ export default function BacktestingPage() {
                   showLegLabels={isLegContinuationStrategy}
                   overlayStructureFromTimeframe="H4"
                   overlayStructureCandlesFallback={chartCandles}
-                  tradeMarkers={selectedTrade ? selectedTradeMarkers : []}
+                  tradeMarkers={selectedTrade ? selectedTradeMarkers : tradeMarkers}
                   selectedTradeHighlight={selectedTrade ? {
                     start_time: selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time,
                     end_time: selectedTrade.exit_time ?? selectedTrade.entry_time ?? selectedTrade.setup_time,
@@ -728,6 +753,7 @@ export default function BacktestingPage() {
                     side: selectedTrade.side,
                   } : null}
                   focusTimeUtc={detailFocusTimeUtc}
+                  focusRangeUtc={m15FocusRangeUtc}
                   movingAverages={movingAverages}
                 />
                 <div className="text-xs text-muted-foreground">

@@ -7,7 +7,7 @@ import {
 const VALID_STRATEGIES: BacktestStrategyKey[] = [
   "peak",
   "break_retest",
-  "leg_continuation",
+  "leg_continuation_h4_m15",
   "fib",
 ];
 
@@ -45,6 +45,7 @@ export async function GET(request: Request) {
     return NextResponse.json(data);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not run backtesting";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const status = message.includes("No trades dataset found") ? 404 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

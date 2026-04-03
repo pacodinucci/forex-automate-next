@@ -27,8 +27,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { BotRuntimeH4Candle } from "@/lib/types";
+import {
+  simulateLegContinuationH4M15,
+  type SimTrade,
+} from "@/lib/backtesting-simulator";
 
-type StrategyKey = "peak" | "break_retest" | "leg_continuation" | "fib";
+type StrategyKey =
+  | "peak"
+  | "break_retest"
+  | "leg_continuation_h4_m15"
+  | "fib";
 
 type DatasetMeta = {
   symbols: string[];
@@ -71,10 +79,17 @@ type BacktestRun = {
   };
 };
 
+type BacktestCandlesResponse = {
+  symbol: string;
+  timeframe: string;
+  count: number;
+  candles: BacktestCandle[];
+};
+
 const STRATEGY_LABELS: Record<StrategyKey, string> = {
   peak: "Peak/Dip",
   break_retest: "Break + Retest",
-  leg_continuation: "Leg Continuation",
+  leg_continuation_h4_m15: "Leg Continuation H4->M15",
   fib: "Fib",
 };
 
@@ -204,31 +219,84 @@ export default function BacktestingPage() {
     setPlaying(false);
 
     try {
-      const buildRunUrl = (tf: string) => {
-        const params = new URLSearchParams({ symbol, timeframe: tf, strategy });
+      const buildCandlesUrl = (tf: string) => {
+        const params = new URLSearchParams({ symbol, timeframe: tf });
         if (start) params.set("start", start);
         if (end) params.set("end", end);
-        return `/api/backtesting/run?${params.toString()}`;
+        return `/api/backtesting/candles?${params.toString()}`;
       };
-      const fetchRun = async (tf: string) => {
-        const response = await fetch(buildRunUrl(tf));
+      const fetchCandles = async (tf: string) => {
+        const response = await fetch(buildCandlesUrl(tf));
         if (!response.ok) {
           const message = await response.text();
-          throw new Error(message || `No se pudo correr backtest (${response.status})`);
+          throw new Error(message || `No se pudieron cargar velas (${response.status})`);
         }
-        return (await response.json()) as BacktestRun;
+        return (await response.json()) as BacktestCandlesResponse;
       };
 
-      const mainPayload = await fetchRun(timeframe);
-      setRun(mainPayload);
+      const mainPayload = await fetchCandles(timeframe);
+      const h4ForLeg = timeframe === "H4" ? mainPayload.candles : [];
 
-      const canLoadM15Detail = timeframe === "H4" && (meta?.timeframesBySymbol[symbol] ?? []).includes("M15");
+      const canLoadM15Detail =
+        strategy === "leg_continuation_h4_m15" &&
+        timeframe === "H4" &&
+        (meta?.timeframesBySymbol[symbol] ?? []).includes("M15");
+
+      let m15Payload: BacktestCandlesResponse | null = null;
       if (canLoadM15Detail) {
-        const detailPayload = await fetchRun("M15");
-        setDetailRunM15(detailPayload);
+        m15Payload = await fetchCandles("M15");
+        setDetailRunM15({
+          symbol,
+          timeframe: "M15",
+          strategy,
+          candles: m15Payload.candles,
+          trades: [],
+          summary: {
+            totalTrades: 0,
+            winningTrades: 0,
+            winRate: 0,
+            totalPnlPoints: 0,
+          },
+        });
       } else {
         setDetailRunM15(null);
       }
+
+      let simulatedTrades: SimTrade[] = [];
+      if (strategy === "leg_continuation_h4_m15") {
+        if (timeframe !== "H4") {
+          throw new Error("Leg Continuation H4->M15 requiere timeframe H4.");
+        }
+        if (!m15Payload) {
+          throw new Error("No hay data M15 para simular Leg Continuation.");
+        }
+        simulatedTrades = simulateLegContinuationH4M15({
+          symbol,
+          h4: h4ForLeg,
+          m15: m15Payload.candles,
+          pivotStrength: 2,
+          slPoints: 100,
+          tpPoints: 400,
+        });
+      }
+
+      const totalTrades = simulatedTrades.length;
+      const winningTrades = simulatedTrades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
+      const totalPnlPoints = simulatedTrades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+
+      setRun({
+        symbol,
+        timeframe,
+        strategy,
+        candles: mainPayload.candles,
+        trades: simulatedTrades,
+        summary: {
+          totalTrades,
+          winningTrades,
+          winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+          totalPnlPoints,
+        },
+      });
 
       setCursor(0);
       setSelectedTradeId(null);
@@ -409,7 +477,13 @@ export default function BacktestingPage() {
   const detailFocusTimeUtc = selectedTrade
     ? selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time ?? null
     : currentCandle?.time_utc ?? null;
-  const showM15DetailChart = Boolean(run && detailRunM15 && timeframe === "H4");
+  const showM15DetailChart = Boolean(
+    run &&
+    detailRunM15 &&
+    timeframe === "H4" &&
+    strategy === "leg_continuation_h4_m15"
+  );
+  const isLegContinuationStrategy = strategy === "leg_continuation_h4_m15";
 
   return (
     <div className="space-y-4">
@@ -494,7 +568,7 @@ export default function BacktestingPage() {
               {loadingRun ? "Cargando..." : "Correr backtest"}
             </Button>
             <span className="text-xs text-muted-foreground">
-              Data local: {symbol || "-"} {timeframe || "-"} | {STRATEGY_LABELS[strategy]}
+              Simulacion cliente: {symbol || "-"} {timeframe || "-"} | {STRATEGY_LABELS[strategy]}
             </span>
           </div>
         </CardContent>
@@ -600,8 +674,11 @@ export default function BacktestingPage() {
                 timeframeLabel={run.timeframe}
                 stageLabel={playing ? "Playback running" : "Playback paused"}
                 symbol=""
+                dataMode="historical"
+                useWebSocket={false}
                 height={520}
                 candlesFallback={chartCandles}
+                showLegLabels={isLegContinuationStrategy}
                 tradeMarkers={tradeMarkers}
                 selectedTradeHighlight={selectedTrade ? {
                   start_time: selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time,
@@ -635,8 +712,13 @@ export default function BacktestingPage() {
                   timeframeLabel="M15"
                   stageLabel={selectedTrade ? "Trade seleccionado" : "Seguimiento por playback"}
                   symbol=""
+                  dataMode="historical"
+                  useWebSocket={false}
                   height={420}
                   candlesFallback={detailChartCandlesM15}
+                  showLegLabels={isLegContinuationStrategy}
+                  overlayStructureFromTimeframe="H4"
+                  overlayStructureCandlesFallback={chartCandles}
                   tradeMarkers={selectedTrade ? selectedTradeMarkers : []}
                   selectedTradeHighlight={selectedTrade ? {
                     start_time: selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time,

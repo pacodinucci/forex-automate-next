@@ -1,7 +1,11 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-export type BacktestStrategyKey = "peak" | "break_retest" | "leg_continuation" | "fib";
+export type BacktestStrategyKey =
+  | "peak"
+  | "break_retest"
+  | "leg_continuation_h4_m15"
+  | "fib";
 
 export type BacktestDatasetMeta = {
   symbols: string[];
@@ -36,7 +40,7 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const STRATEGY_FILE_SEGMENTS: Record<BacktestStrategyKey, string> = {
   peak: "trades_peak",
   break_retest: "trades_break_retest",
-  leg_continuation: "trades_leg_continuation",
+  leg_continuation_h4_m15: "trades_leg_continuation",
   fib: "trades_fib",
 };
 
@@ -178,6 +182,9 @@ export async function listBacktestDatasets(): Promise<BacktestDatasetMeta> {
       strategiesBySymbol.set(symbol, new Set<BacktestStrategyKey>());
     }
     strategiesBySymbol.get(symbol)?.add(strategy);
+    if (strategy === "leg_continuation_h4_m15") {
+      strategiesBySymbol.get(symbol)?.add("leg_continuation_h4_m15");
+    }
   }
 
   const symbols = [...new Set([...timeframesBySymbol.keys(), ...strategiesBySymbol.keys()])].sort();
@@ -186,8 +193,15 @@ export async function listBacktestDatasets(): Promise<BacktestDatasetMeta> {
   const stObj: Record<string, BacktestStrategyKey[]> = {};
 
   for (const symbol of symbols) {
-    tfObj[symbol] = [...(timeframesBySymbol.get(symbol) ?? new Set<string>())].sort((a, b) => a.localeCompare(b));
-    stObj[symbol] = [...(strategiesBySymbol.get(symbol) ?? new Set<BacktestStrategyKey>())].sort((a, b) => a.localeCompare(b));
+    const symbolTfs = [...(timeframesBySymbol.get(symbol) ?? new Set<string>())].sort((a, b) => a.localeCompare(b));
+    tfObj[symbol] = symbolTfs;
+    const strategySet = new Set<BacktestStrategyKey>(strategiesBySymbol.get(symbol) ?? new Set<BacktestStrategyKey>());
+    const hasH4 = symbolTfs.includes("H4");
+    const hasM15 = symbolTfs.includes("M15");
+    if (hasH4 && hasM15) {
+      strategySet.add("leg_continuation_h4_m15");
+    }
+    stObj[symbol] = [...strategySet].sort((a, b) => a.localeCompare(b));
   }
 
   return {
@@ -202,30 +216,14 @@ async function readCsvRecords(filePath: string) {
   return parseCsv(text).records;
 }
 
-function findTradeFileName(files: string[], symbol: string, strategy: BacktestStrategyKey) {
-  const segment = STRATEGY_FILE_SEGMENTS[strategy];
-  const wantedPrefix = `${symbol.toUpperCase()}_${segment}`.toLowerCase();
-
-  const exactAll = files.find((name) => name.toLowerCase() === `${wantedPrefix}_all.csv`);
-  if (exactAll) return exactAll;
-
-  const exact = files.find((name) => name.toLowerCase() === `${wantedPrefix}.csv`);
-  if (exact) return exact;
-
-  return files.find((name) => name.toLowerCase().startsWith(wantedPrefix));
-}
-
-export async function loadBacktestRun(params: {
+export async function loadBacktestCandles(params: {
   symbol: string;
   timeframe: string;
-  strategy: BacktestStrategyKey;
   start?: string;
   end?: string;
 }) {
   const symbol = params.symbol.trim().toUpperCase();
   const timeframe = params.timeframe.trim().toUpperCase();
-  const strategy = params.strategy;
-
   const startIso = normalizeTimestamp(params.start);
   const endIso = normalizeTimestamp(params.end, true);
 
@@ -257,8 +255,47 @@ export async function loadBacktestRun(params: {
     .filter((item): item is BacktestCandle => Boolean(item))
     .filter((candle) => inDateRange(candle.time_utc, startIso, endIso));
 
+  return candles;
+}
+
+function findTradeFileName(files: string[], symbol: string, strategy: BacktestStrategyKey) {
+  const segment = STRATEGY_FILE_SEGMENTS[strategy];
+  const wantedPrefix = `${symbol.toUpperCase()}_${segment}`.toLowerCase();
+
+  const exactAll = files.find((name) => name.toLowerCase() === `${wantedPrefix}_all.csv`);
+  if (exactAll) return exactAll;
+
+  const exact = files.find((name) => name.toLowerCase() === `${wantedPrefix}.csv`);
+  if (exact) return exact;
+
+  return files.find((name) => name.toLowerCase().startsWith(wantedPrefix));
+}
+
+export async function loadBacktestRun(params: {
+  symbol: string;
+  timeframe: string;
+  strategy: BacktestStrategyKey;
+  start?: string;
+  end?: string;
+}) {
+  const symbol = params.symbol.trim().toUpperCase();
+  const timeframe = params.timeframe.trim().toUpperCase();
+  const strategy = params.strategy;
+
+  const startIso = normalizeTimestamp(params.start);
+  const endIso = normalizeTimestamp(params.end, true);
+  const candles = await loadBacktestCandles({
+    symbol,
+    timeframe,
+    start: params.start,
+    end: params.end,
+  });
+
   const dataFiles = await fs.readdir(DATA_DIR);
   const tradeFileName = findTradeFileName(dataFiles, symbol, strategy);
+  if (!tradeFileName) {
+    throw new Error(`No trades dataset found for ${symbol} with strategy ${strategy}`);
+  }
 
   let trades: BacktestTrade[] = [];
   if (tradeFileName) {

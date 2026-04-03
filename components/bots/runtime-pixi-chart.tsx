@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BotRuntimeH4Candle } from "@/lib/types";
-import { getMarketWsUrl } from "@/lib/market-stream";
 import { ZoomIn, ZoomOut } from "lucide-react";
+import { useRuntimeChartData, type RuntimeChartCandle } from "@/hooks/use-runtime-chart-data";
 
 type Props = {
   title: string;
@@ -25,15 +25,11 @@ type Props = {
   onDeselectSelectedTrade?: () => void;
   focusTimeUtc?: string | null;
   movingAverages?: RuntimeMovingAverageConfig[];
+  dataMode?: "live" | "historical";
+  useWebSocket?: boolean;
 };
 
-type Candle = {
-  time_utc: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-};
+type Candle = RuntimeChartCandle;
 
 type DrawLayout = {
   marginLeft: number;
@@ -197,11 +193,6 @@ function normalizeFallback(candlesFallback: BotRuntimeH4Candle[]) {
     });
   }
   return [...dedup.values()].sort((a, b) => new Date(a.time_utc).getTime() - new Date(b.time_utc).getTime());
-}
-
-function toMs(timestamp?: number) {
-  if (!timestamp) return Date.now();
-  return timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
 }
 
 function formatXAxisLabel(iso: string, timeframeMin: number) {
@@ -397,29 +388,6 @@ function getCandidateLevelsForOpenSegment(legs: VisibleLeg[], candles: Candle[])
   };
 }
 
-function timeframeAliases(timeframeLabel: string) {
-  const tf = timeframeLabel.trim().toUpperCase();
-  if (tf === "M1") return ["M1", "m1", "1m", "MINUTE_1"];
-  if (tf === "M5") return ["M5", "m5", "5m", "MINUTE_5"];
-  if (tf === "M15") return ["M15", "m15", "15m", "MINUTE_15"];
-  if (tf === "M30") return ["M30", "m30", "30m", "MINUTE_30"];
-  if (tf === "H1") return ["H1", "h1", "1h", "HOUR_1"];
-  if (tf === "H4") return ["H4", "h4", "4h", "HOUR_4"];
-  return [tf];
-}
-
-function mergeCandles(...inputs: Candle[][]) {
-  const dedup = new Map<string, Candle>();
-  for (const group of inputs) {
-    for (const candle of group) {
-      if (!candle.time_utc) continue;
-      dedup.set(candle.time_utc, candle);
-    }
-  }
-  return [...dedup.values()]
-    .sort((a, b) => new Date(a.time_utc).getTime() - new Date(b.time_utc).getTime())
-    .slice(-2000);
-}
 
 function lowerBound(values: number[], target: number) {
   let lo = 0;
@@ -501,47 +469,6 @@ function mapLegsToTarget(
   return out;
 }
 
-function parseHistoryCandles(payload: unknown): Candle[] {
-  const root =
-    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
-  const asArray = Array.isArray(payload)
-    ? payload
-    : Array.isArray(root?.candles)
-      ? (root?.candles as unknown[])
-      : Array.isArray(root?.data)
-        ? (root?.data as unknown[])
-        : root?.data && typeof root.data === "object" && Array.isArray((root.data as Record<string, unknown>).candles)
-          ? ((root.data as Record<string, unknown>).candles as unknown[])
-          : [];
-
-  return asArray
-    .map((item) => {
-      if (!item || typeof item !== "object") return null;
-      const row = item as Record<string, unknown>;
-      const rawTime = row.time_utc ?? row.time ?? row.timeUtc ?? row.timestamp ?? row.ts;
-      const open = Number(row.open ?? row.o);
-      const high = Number(row.high ?? row.h);
-      const low = Number(row.low ?? row.l);
-      const close = Number(row.close ?? row.c);
-      if ([open, high, low, close].some((n) => Number.isNaN(n))) return null;
-
-      let iso = "";
-      if (typeof rawTime === "number" && Number.isFinite(rawTime)) {
-        const ms = rawTime > 10_000_000_000 ? rawTime : rawTime * 1000;
-        iso = new Date(ms).toISOString();
-      } else if (typeof rawTime === "string" && rawTime.trim()) {
-        const ms = Date.parse(rawTime);
-        if (!Number.isNaN(ms)) {
-          iso = new Date(ms).toISOString();
-        }
-      }
-      if (!iso) return null;
-
-      return { time_utc: iso, open, high, low, close };
-    })
-    .filter((item): item is Candle => Boolean(item));
-}
-
 function normalizeSymbolKey(value: string | undefined | null) {
   return String(value ?? "")
     .trim()
@@ -549,67 +476,6 @@ function normalizeSymbolKey(value: string | undefined | null) {
     .replace(/[^A-Z0-9]/g, "");
 }
 
-function pickNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function extractWsTickForSymbol(raw: unknown, symbol: string) {
-  const wanted = normalizeSymbolKey(symbol);
-  if (!wanted) return null;
-
-  const parseQuote = (value: unknown) => {
-    if (!isObject(value)) return null;
-    const incomingSymbol = normalizeSymbolKey(
-      typeof value.symbol === "string"
-        ? value.symbol
-        : typeof value.instrument === "string"
-          ? value.instrument
-          : ""
-    );
-    if (!incomingSymbol || incomingSymbol !== wanted) return null;
-
-    const bid = pickNumber(value.bid);
-    const ask = pickNumber(value.ask);
-    const mid = pickNumber(value.mid);
-    const price = pickNumber(value.price);
-    const px = mid ?? price ?? (bid !== undefined && ask !== undefined ? (bid + ask) / 2 : bid ?? ask);
-    if (px === undefined) return null;
-
-    const ts = pickNumber(value.timestamp ?? value.ts ?? value.time);
-    return {
-      price: px,
-      timestamp: ts,
-    };
-  };
-
-  const direct = parseQuote(raw);
-  if (direct) return direct;
-
-  if (!isObject(raw)) return null;
-  const candidates = [raw.prices, raw.quotes, raw.items, raw.data, raw.payload, raw.tick, raw.quote];
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) {
-      for (const item of candidate) {
-        const quote = parseQuote(item);
-        if (quote) return quote;
-      }
-    } else {
-      const quote = parseQuote(candidate);
-      if (quote) return quote;
-    }
-  }
-
-  return null;
-}
 
 export default function RuntimePixiChart({
   title,
@@ -631,6 +497,8 @@ export default function RuntimePixiChart({
   onDeselectSelectedTrade,
   focusTimeUtc = null,
   movingAverages = [],
+  dataMode = "live",
+  useWebSocket = true,
 }: Props) {
   const DEFAULT_VISIBLE_BARS_BASE = 20;
   const ZOOM_IN_FACTOR = 0.84;
@@ -655,9 +523,7 @@ export default function RuntimePixiChart({
   const yScaleAnchorRef = useRef<{ ratio: number; price: number } | null>(null);
   const yScaleMetaRef = useRef<{ pTop: number; pRange: number; marginTop: number; innerHeight: number } | null>(null);
   const userInteractedRef = useRef(false);
-  const appliedSnapshotRef = useRef<string>("");
   const appliedOverlaySnapshotRef = useRef<string>("");
-  const backfillAttemptsRef = useRef<Map<string, number>>(new Map());
   const lastFocusTimeRef = useRef<string>("");
   const selectedHighlightBoxRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const highlightClickRef = useRef<{
@@ -669,10 +535,6 @@ export default function RuntimePixiChart({
 
   const [width, setWidth] = useState(900);
   const [appReadyTick, setAppReadyTick] = useState(0);
-  const [candles, setCandles] = useState<Candle[]>(normalizeFallback(candlesFallback));
-  const [wsTicks, setWsTicks] = useState(0);
-  const [wsLive, setWsLive] = useState<{ price?: number; timestamp?: number }>({});
-  const [liveBoundaryIso, setLiveBoundaryIso] = useState<string | null>(null);
   const [range, setRange] = useState<{ start: number; end: number } | null>(null);
   const [crosshair, setCrosshair] = useState<{ x: number; y: number } | null>(null);
   const [yZoom, setYZoom] = useState(1);
@@ -715,9 +577,23 @@ export default function RuntimePixiChart({
     () => normalizeFallback(overlayStructureCandlesFallback),
     [overlayStructureCandlesFallback]
   );
-  const wsSymbol = useMemo(() => normalizeSymbolKey(symbol), [symbol]);
-  const effectiveLivePrice = wsLive.price ?? livePrice;
-  const effectiveLiveTimestamp = wsLive.timestamp ?? liveTimestamp;
+  const {
+    candles,
+    wsTicks,
+    liveBoundaryIso,
+    effectiveLivePrice,
+    isHistorical,
+  } = useRuntimeChartData({
+    symbol,
+    timeframeLabel,
+    normalizedFallback,
+    fallbackSignature,
+    defaultVisibleBars,
+    dataMode,
+    useWebSocket,
+    livePrice,
+    liveTimestamp,
+  });
   const legs = useMemo(() => {
     const pivots = compressPivots(findPivots(candles, effectivePivotStrength));
     return buildLegsExtended(candles, pivots);
@@ -765,21 +641,13 @@ export default function RuntimePixiChart({
   }, [range]);
 
   useEffect(() => {
-    const nextSnapshot = `${normalizeSymbolKey(symbol)}|${timeframeLabel}|${fallbackSignature}`;
-    if (appliedSnapshotRef.current === nextSnapshot) {
-      return;
-    }
-    appliedSnapshotRef.current = nextSnapshot;
-
-    setCandles(normalizedFallback);
-    setWsTicks(0);
+    userInteractedRef.current = false;
     setRange(null);
-    setWsLive({});
-    setLiveBoundaryIso(null);
     setYZoom(1);
+    setYCenterPrice(null);
     yScaleAnchorRef.current = null;
     appliedOverlaySnapshotRef.current = "";
-  }, [fallbackSignature, symbol, timeframeLabel, normalizedFallback]);
+  }, [dataMode, symbol, timeframeLabel]);
 
   useEffect(() => {
     if (!overlayEnabled) return;
@@ -790,146 +658,6 @@ export default function RuntimePixiChart({
     appliedOverlaySnapshotRef.current = nextSnapshot;
     setOverlayCandles(normalizedOverlayFallback);
   }, [overlayEnabled, overlayFallbackSignature, overlayTimeframeLabel, normalizedOverlayFallback, symbol]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!symbol) return;
-    const backfillKey = `${normalizeSymbolKey(symbol)}|${timeframeLabel}`;
-
-    async function backfillHistory() {
-      // Avoid extra traffic when we already have enough bars from runtime/ws.
-      if (candles.length >= defaultVisibleBars) {
-        return;
-      }
-      const attempts = backfillAttemptsRef.current.get(backfillKey) ?? 0;
-      if (attempts >= 3) {
-        return;
-      }
-      backfillAttemptsRef.current.set(backfillKey, attempts + 1);
-
-      const aliases = timeframeAliases(timeframeLabel);
-      for (const tf of aliases) {
-        try {
-          const params = new URLSearchParams();
-          params.set("limit", String(Math.max(defaultVisibleBars * 5, 120)));
-          const url = `/api/history/${encodeURIComponent(symbol)}/${encodeURIComponent(tf)}?${params.toString()}`;
-          const response = await fetch(url, { cache: "no-store" });
-          if (!response.ok) {
-            continue;
-          }
-          const payload = (await response.json()) as unknown;
-          const history = parseHistoryCandles(payload);
-          if (history.length === 0) {
-            continue;
-          }
-          if (cancelled) return;
-          setCandles((current) => mergeCandles(history, current));
-          return;
-        } catch {
-          continue;
-        }
-      }
-
-      if (!cancelled) {
-        window.setTimeout(() => {
-          if (!cancelled) {
-            setCandles((current) => [...current]);
-          }
-        }, 1500);
-      }
-    }
-
-    void backfillHistory();
-    return () => {
-      cancelled = true;
-    };
-  }, [candles.length, defaultVisibleBars, symbol, timeframeLabel]);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!symbol || !overlayEnabled || !overlayTimeframeLabel) return;
-    const backfillKey = `${normalizeSymbolKey(symbol)}|${overlayTimeframeLabel}|overlay`;
-
-    async function backfillOverlayHistory() {
-      if (overlayCandles.length >= defaultVisibleBars) {
-        return;
-      }
-      const attempts = backfillAttemptsRef.current.get(backfillKey) ?? 0;
-      if (attempts >= 3) {
-        return;
-      }
-      backfillAttemptsRef.current.set(backfillKey, attempts + 1);
-
-      const aliases = timeframeAliases(overlayTimeframeLabel);
-      for (const tf of aliases) {
-        try {
-          const params = new URLSearchParams();
-          params.set("limit", String(Math.max(defaultVisibleBars * 5, 120)));
-          const url = `/api/history/${encodeURIComponent(symbol)}/${encodeURIComponent(tf)}?${params.toString()}`;
-          const response = await fetch(url, { cache: "no-store" });
-          if (!response.ok) {
-            continue;
-          }
-          const payload = (await response.json()) as unknown;
-          const history = parseHistoryCandles(payload);
-          if (history.length === 0) {
-            continue;
-          }
-          if (cancelled) return;
-          setOverlayCandles((current) => mergeCandles(history, current));
-          return;
-        } catch {
-          continue;
-        }
-      }
-    }
-
-    void backfillOverlayHistory();
-    return () => {
-      cancelled = true;
-    };
-  }, [defaultVisibleBars, overlayCandles.length, overlayEnabled, overlayTimeframeLabel, symbol]);
-
-  useEffect(() => {
-    if (!wsSymbol) return;
-
-    let closedByUnmount = false;
-    let reconnectTimeout: number | null = null;
-    let ws: WebSocket | null = null;
-    const connect = () => {
-      ws = new WebSocket(getMarketWsUrl([wsSymbol], 1));
-
-      ws.onmessage = (event) => {
-        try {
-          const raw = JSON.parse(event.data) as unknown;
-          const tick = extractWsTickForSymbol(raw, wsSymbol);
-          if (!tick) return;
-          setWsTicks((v) => v + 1);
-          setWsLive({
-            price: tick.price,
-            timestamp: tick.timestamp,
-          });
-        } catch {
-          return;
-        }
-      };
-
-      ws.onclose = () => {
-        if (closedByUnmount) return;
-        reconnectTimeout = window.setTimeout(() => connect(), 1000);
-      };
-    };
-
-    connect();
-
-    return () => {
-      closedByUnmount = true;
-      if (reconnectTimeout !== null) {
-        window.clearTimeout(reconnectTimeout);
-      }
-      ws?.close();
-    };
-  }, [wsSymbol]);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -1000,70 +728,6 @@ export default function RuntimePixiChart({
     });
   }, [candles.length, defaultVisibleBars]);
 
-  useEffect(() => {
-    if (effectiveLivePrice === undefined || Number.isNaN(effectiveLivePrice)) return;
-    const ms = toMs(effectiveLiveTimestamp);
-    const bucketMs = timeframeMin * 60 * 1000;
-    const bucketStartMs = Math.floor(ms / bucketMs) * bucketMs;
-    const bucketIso = new Date(bucketStartMs).toISOString();
-    setLiveBoundaryIso((current) => current ?? bucketIso);
-
-    setCandles((current) => {
-      if (current.length === 0) {
-        return [
-          {
-            time_utc: bucketIso,
-            open: effectiveLivePrice,
-            high: effectiveLivePrice,
-            low: effectiveLivePrice,
-            close: effectiveLivePrice,
-          },
-        ];
-      }
-
-      const last = current[current.length - 1];
-      const lastBucketMs = new Date(last.time_utc).getTime();
-
-      if (bucketStartMs === lastBucketMs) {
-        const next = [...current];
-        next[next.length - 1] = {
-          ...last,
-          high: Math.max(last.high, effectiveLivePrice),
-          low: Math.min(last.low, effectiveLivePrice),
-          close: effectiveLivePrice,
-        };
-        return next;
-      }
-
-      if (bucketStartMs > lastBucketMs) {
-        return mergeCandles(current, [
-          {
-            time_utc: bucketIso,
-            open: last.close,
-            high: Math.max(last.close, effectiveLivePrice),
-            low: Math.min(last.close, effectiveLivePrice),
-            close: effectiveLivePrice,
-          },
-        ]);
-      }
-
-      const idx = current.findIndex((candle) => candle.time_utc === bucketIso);
-      if (idx >= 0) {
-        const target = current[idx];
-        const next = [...current];
-        next[idx] = {
-          ...target,
-          high: Math.max(target.high, effectiveLivePrice),
-          low: Math.min(target.low, effectiveLivePrice),
-          close: effectiveLivePrice,
-        };
-        return next;
-      }
-
-      return current;
-    });
-
-  }, [effectiveLivePrice, effectiveLiveTimestamp, timeframeMin]);
 
   useEffect(() => {
     const app = appRef.current;
@@ -1383,7 +1047,7 @@ export default function RuntimePixiChart({
       });
 
       if (candles.length === 0 || !range) {
-        const t = new Text("Waiting WS ticks...", baseText);
+        const t = new Text(isHistorical ? "No historical candles loaded." : "Waiting WS ticks...", baseText);
         t.x = margin.left;
         t.y = margin.top + innerHeight / 2;
         app.stage.addChild(t);
@@ -1887,6 +1551,62 @@ export default function RuntimePixiChart({
         const inX = crosshair.x >= margin.left && crosshair.x <= width - margin.right;
         const inY = crosshair.y >= margin.top && crosshair.y <= height - margin.bottom;
         if (inX && inY) {
+          const localIdx = Math.max(0, Math.min(visible.length - 1, Math.floor((crosshair.x - margin.left) / slot)));
+          const hovered = visible[localIdx];
+
+          if (hovered) {
+            const ohlcBaseStyle = new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 11,
+              fill: 0x94a3b8,
+              fontWeight: "300",
+            });
+            const candleUp = hovered.close >= hovered.open;
+            const ohlcNumberStyle = new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 11,
+              fill: candleUp ? 0x0f766e : 0xb91c1c,
+              fontWeight: "500",
+            });
+
+            const ohlcPairs: Array<[string, number]> = [
+              ["O", hovered.open],
+              ["H", hovered.high],
+              ["L", hovered.low],
+              ["C", hovered.close],
+            ];
+            let ohlcCursorX = margin.left + 22;
+            const ohlcY = margin.top + 4;
+            for (const [label, value] of ohlcPairs) {
+              const labelText = new Text(label, ohlcBaseStyle);
+              labelText.x = ohlcCursorX;
+              labelText.y = ohlcY;
+              app.stage.addChild(labelText);
+
+              const valueText = new Text(value.toFixed(5), ohlcNumberStyle);
+              valueText.x = labelText.x + labelText.width + 4;
+              valueText.y = ohlcY;
+              app.stage.addChild(valueText);
+
+              ohlcCursorX = valueText.x + valueText.width + 12;
+            }
+
+            const delta = hovered.close - hovered.open;
+            const deltaPct = hovered.open !== 0 ? (delta / hovered.open) * 100 : 0;
+            const deltaPositive = delta >= 0;
+            const deltaStyle = new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 11,
+              fill: deltaPositive ? 0x0f766e : 0xb91c1c,
+              fontWeight: "500",
+            });
+            const deltaText = `${deltaPositive ? "+" : ""}${delta.toFixed(5)} (${deltaPositive ? "+" : ""}${deltaPct.toFixed(2)}%)`;
+            const deltaLabel = new Text(deltaText, deltaStyle);
+            deltaLabel.x = ohlcCursorX + 2;
+            deltaLabel.y = margin.top + 4;
+            app.stage.addChild(deltaLabel);
+          }
+
           const ch = new Graphics();
           ch.lineStyle(0.8, 0xcbd5e1, 0.95);
           const dash = 3;
@@ -1927,7 +1647,6 @@ export default function RuntimePixiChart({
           yLabel.y = yBoxY + yPadY;
           app.stage.addChild(yLabel);
 
-          const localIdx = Math.max(0, Math.min(visible.length - 1, Math.floor((crosshair.x - margin.left) / slot)));
           const timeLabel = formatXAxisLabel(visible[localIdx]?.time_utc ?? "", timeframeMin);
           if (timeLabel) {
             const xLabel = new Text(timeLabel, new TextStyle({
@@ -1959,7 +1678,7 @@ export default function RuntimePixiChart({
     };
 
     void draw();
-  }, [appReadyTick, breakLevel, candles, candidateLevels, continuationLevel, crosshair, drawableLegs, effectiveLivePrice, height, liveBoundaryIso, movingAverageSeries, range, rightOffsetBars, selectedTradeHighlight, timeframeMin, tradeMarkers, width, yCenterPrice, yZoom]);
+  }, [appReadyTick, breakLevel, candles, candidateLevels, continuationLevel, crosshair, drawableLegs, effectiveLivePrice, height, isHistorical, liveBoundaryIso, movingAverageSeries, range, rightOffsetBars, selectedTradeHighlight, timeframeMin, tradeMarkers, width, yCenterPrice, yZoom]);
 
   return (
     <div className="relative rounded-md border bg-slate-50 p-2">
@@ -1979,7 +1698,11 @@ export default function RuntimePixiChart({
         <span>
           {(range ? range.end - range.start + 1 : candles.length)}/{candles.length} bars | Ctrl+wheel zoom X | drag pan X/Y | drag right gap X | drag right scale zoom Y
         </span>
-        <span>Source: ws+runtime ({symbol}) | ws ticks: {wsTicks}</span>
+        <span>
+          {isHistorical
+            ? `Source: historical (${symbol || "-"})`
+            : `Source: ws+runtime (${symbol}) | ws ticks: ${wsTicks}`}
+        </span>
       </div>
       <div className="mt-2">
         <div className="flex items-center gap-2">

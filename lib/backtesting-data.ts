@@ -305,6 +305,10 @@ export async function loadBacktestRun(params: {
         const setupTime = normalizeTimestamp(row.setup_time);
         const entryTime = normalizeTimestamp(row.entry_time);
         const exitTime = normalizeTimestamp(row.exit_time);
+        const entry = parseNumber(row.entry);
+        const exit = parseNumber(row.exit);
+        const pnlPoints = parseNumber(row.pnl_points);
+        const result = row.result?.trim();
         const symbolFromRow = (row.symbol || symbol).toUpperCase();
 
         const mainTime = entryTime ?? setupTime ?? exitTime;
@@ -314,18 +318,21 @@ export async function loadBacktestRun(params: {
         const sideRaw = (row.side ?? "").toLowerCase();
         const side: BacktestTrade["side"] = sideRaw === "buy" || sideRaw === "sell" ? sideRaw : "unknown";
 
-        return {
+        const trade: BacktestTrade = {
           id: `${tradeFileName}:${index}`,
           symbol: symbolFromRow,
           side,
-          setup_time: setupTime,
-          entry_time: entryTime,
-          entry: parseNumber(row.entry),
-          exit_time: exitTime,
-          exit: parseNumber(row.exit),
-          result: row.result,
-          pnl_points: parseNumber(row.pnl_points),
         };
+
+        if (setupTime !== undefined) trade.setup_time = setupTime;
+        if (entryTime !== undefined) trade.entry_time = entryTime;
+        if (entry !== undefined) trade.entry = entry;
+        if (exitTime !== undefined) trade.exit_time = exitTime;
+        if (exit !== undefined) trade.exit = exit;
+        if (result) trade.result = result;
+        if (pnlPoints !== undefined) trade.pnl_points = pnlPoints;
+
+        return trade;
       })
       .filter((item): item is BacktestTrade => Boolean(item));
   }

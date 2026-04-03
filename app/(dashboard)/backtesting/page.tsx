@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -93,6 +94,9 @@ const STRATEGY_LABELS: Record<StrategyKey, string> = {
   fib: "Fib",
 };
 
+const DEFAULT_SL_POINTS = 100;
+const DEFAULT_TP_POINTS = 400;
+
 function toRuntimeCandles(candles: BacktestCandle[]): BotRuntimeH4Candle[] {
   return candles.map((candle) => ({
     time_utc: candle.time_utc,
@@ -133,6 +137,8 @@ export default function BacktestingPage() {
   const [strategy, setStrategy] = useState<StrategyKey>("peak");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const [slPoints, setSlPoints] = useState(DEFAULT_SL_POINTS);
+  const [tpPoints, setTpPoints] = useState(DEFAULT_TP_POINTS);
   const [speedMs, setSpeedMs] = useState(180);
   const [indicatorsModalOpen, setIndicatorsModalOpen] = useState(false);
   const [indicatorKind, setIndicatorKind] = useState<"sma" | "ema">("sma");
@@ -221,6 +227,15 @@ export default function BacktestingPage() {
     setPlaying(false);
 
     try {
+      if (!Number.isFinite(slPoints) || slPoints <= 0) {
+        throw new Error("SL points debe ser un numero mayor a 0.");
+      }
+      if (!Number.isFinite(tpPoints) || tpPoints <= 0) {
+        throw new Error("TP points debe ser un numero mayor a 0.");
+      }
+      const validatedSlPoints = Math.max(1, Math.floor(slPoints));
+      const validatedTpPoints = Math.max(1, Math.floor(tpPoints));
+
       const buildCandlesUrl = (tf: string) => {
         const params = new URLSearchParams({ symbol, timeframe: tf });
         if (start) params.set("start", start);
@@ -277,8 +292,8 @@ export default function BacktestingPage() {
           h4: h4ForLeg,
           m15: m15Payload.candles,
           pivotStrength: 2,
-          slPoints: 100,
-          tpPoints: 400,
+          slPoints: validatedSlPoints,
+          tpPoints: validatedTpPoints,
         });
       }
 
@@ -574,6 +589,7 @@ export default function BacktestingPage() {
               <div className="text-xs uppercase text-muted-foreground">End (opcional)</div>
               <Input value={end} onChange={(event) => setEnd(event.target.value)} placeholder="2025-03-31" />
             </div>
+
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -582,7 +598,51 @@ export default function BacktestingPage() {
             </Button>
             <span className="text-xs text-muted-foreground">
               Simulacion cliente: {symbol || "-"} {timeframe || "-"} | {STRATEGY_LABELS[strategy]}
+              {strategy === "leg_continuation_h4_m15" ? ` | SL ${Math.max(1, Math.floor(slPoints))} | TP ${Math.max(1, Math.floor(tpPoints))}` : ""}
             </span>
+            <div className="ml-auto">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button type="button" variant="outline">
+                    Stops: SL {Math.max(1, Math.floor(slPoints))} | TP {Math.max(1, Math.floor(tpPoints))}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 space-y-3" align="end">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs uppercase text-muted-foreground">SL points</div>
+                    <Input
+                      className="h-9 w-28"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={slPoints}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        if (!Number.isNaN(next) && Number.isFinite(next)) {
+                          setSlPoints(next);
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs uppercase text-muted-foreground">TP points</div>
+                    <Input
+                      className="h-9 w-28"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={tpPoints}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        if (!Number.isNaN(next) && Number.isFinite(next)) {
+                          setTpPoints(next);
+                        }
+                      }}
+                    />
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
           </div>
         </CardContent>
       </Card>

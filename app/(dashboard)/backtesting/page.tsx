@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Layers3 } from "lucide-react";
-import RuntimePixiChart, { type RuntimeMovingAverageConfig } from "@/components/bots/runtime-pixi-chart";
+import { ArrowLeft, ArrowRight, Filter, Layers3, Search } from "lucide-react";
+import RuntimePixiChart, {
+  type RuntimeMovingAverageConfig,
+} from "@/components/bots/runtime-pixi-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,7 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +42,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import type { BotRuntimeH4Candle } from "@/lib/types";
 import {
   simulateLegContinuationH4M15,
@@ -43,11 +57,7 @@ import {
 } from "@/lib/backtesting-simulator";
 import { cn } from "@/lib/utils";
 
-type StrategyKey =
-  | "peak"
-  | "break_retest"
-  | "leg_continuation_h4_m15"
-  | "fib";
+type StrategyKey = "peak" | "break_retest" | "leg_continuation_h4_m15" | "fib";
 
 type DatasetMeta = {
   symbols: string[];
@@ -178,6 +188,19 @@ const PORTFOLIO_VIEW_NAME = "Barrido de Portafolio";
 const GRID_SL_VALUES = [100, 200, 250, 300, 400, 500, 600];
 const GRID_TP_VALUES = [40, 60, 80, 100, 200, 250, 300, 400, 500, 600];
 
+const summaryPnlChartConfig = {
+  pnl: { label: "PnL", color: "oklch(0.69 0.17 143)" },
+} satisfies ChartConfig;
+
+const instrumentMonthChartConfig = {
+  pnl: { label: "PnL", color: "oklch(0.69 0.17 143)" },
+  trades: { label: "Trades", color: "oklch(0.57 0.103 196)" },
+} satisfies ChartConfig;
+
+const summaryMonthlyPnlChartConfig = {
+  pnl: { label: "PnL", color: "oklch(0.57 0.103 196)" },
+} satisfies ChartConfig;
+
 function toRuntimeCandles(candles: BacktestCandle[]): BotRuntimeH4Candle[] {
   return candles.map((candle) => ({
     time_utc: candle.time_utc,
@@ -213,6 +236,22 @@ function fmtCount(value: number) {
 
 function comboKey(sl: number, tp: number) {
   return `${sl}:${tp}`;
+}
+
+function tradeStatusLabel(result?: string, pnlPoints?: number) {
+  if (result === "TP") return "Completed";
+  if (result === "SL") return "Declined";
+  if ((pnlPoints ?? 0) > 0) return "Completed";
+  if ((pnlPoints ?? 0) < 0) return "Declined";
+  return "Flat";
+}
+
+function tradeStatusClass(result?: string, pnlPoints?: number) {
+  const label = tradeStatusLabel(result, pnlPoints);
+  if (label === "Completed")
+    return "border-emerald-200 bg-emerald-100 text-emerald-700";
+  if (label === "Declined") return "border-rose-200 bg-rose-100 text-rose-700";
+  return "border-slate-200 bg-slate-100 text-slate-600";
 }
 
 function tradeMainTime(trade: PortfolioTradeDetail) {
@@ -259,25 +298,39 @@ export default function BacktestingPage() {
   const [indicatorsModalOpen, setIndicatorsModalOpen] = useState(false);
   const [indicatorKind, setIndicatorKind] = useState<"sma" | "ema">("sma");
   const [indicatorPeriod, setIndicatorPeriod] = useState(20);
-  const [movingAverages, setMovingAverages] = useState<RuntimeMovingAverageConfig[]>([]);
+  const [movingAverages, setMovingAverages] = useState<
+    RuntimeMovingAverageConfig[]
+  >([]);
 
   const [run, setRun] = useState<BacktestRun | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
-  const [portfolioResult, setPortfolioResult] = useState<PortfolioGridResponse | null>(null);
+  const [portfolioResult, setPortfolioResult] =
+    useState<PortfolioGridResponse | null>(null);
   const [portfolioProgressDone, setPortfolioProgressDone] = useState(0);
   const [portfolioProgressTotal, setPortfolioProgressTotal] = useState(0);
-  const [portfolioCurrentSymbol, setPortfolioCurrentSymbol] = useState<string | null>(null);
-  const [portfolioCurrentSl, setPortfolioCurrentSl] = useState<number | null>(null);
-  const [portfolioCurrentTp, setPortfolioCurrentTp] = useState<number | null>(null);
+  const [portfolioCurrentSymbol, setPortfolioCurrentSymbol] = useState<
+    string | null
+  >(null);
+  const [portfolioCurrentSl, setPortfolioCurrentSl] = useState<number | null>(
+    null,
+  );
+  const [portfolioCurrentTp, setPortfolioCurrentTp] = useState<number | null>(
+    null,
+  );
   const [portfolioDetailOpen, setPortfolioDetailOpen] = useState(false);
-  const [selectedPortfolioRow, setSelectedPortfolioRow] = useState<PortfolioGridRow | null>(null);
+  const [selectedPortfolioRow, setSelectedPortfolioRow] =
+    useState<PortfolioGridRow | null>(null);
+  const [portfolioDetailTab, setPortfolioDetailTab] = useState("summary");
   const [detailRunM15, setDetailRunM15] = useState<BacktestRun | null>(null);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
   const [focusTimeUtc, setFocusTimeUtc] = useState<string | null>(null);
-  const [m15FocusRangeUtc, setM15FocusRangeUtc] = useState<{ startTimeUtc: string; endExclusiveTimeUtc: string } | null>(null);
+  const [m15FocusRangeUtc, setM15FocusRangeUtc] = useState<{
+    startTimeUtc: string;
+    endExclusiveTimeUtc: string;
+  } | null>(null);
   const chartSectionRef = useRef<HTMLDivElement | null>(null);
   const m15SectionRef = useRef<HTMLDivElement | null>(null);
 
@@ -289,21 +342,26 @@ export default function BacktestingPage() {
       try {
         const response = await fetch("/api/backtesting/datasets");
         if (!response.ok) {
-          throw new Error(`No se pudieron cargar datasets (${response.status})`);
+          throw new Error(
+            `No se pudieron cargar datasets (${response.status})`,
+          );
         }
 
         const payload = (await response.json()) as DatasetMeta;
         setMeta(payload);
 
         const firstSymbol = payload.symbols[0] ?? "";
-        const firstTimeframe = payload.timeframesBySymbol[firstSymbol]?.[0] ?? "";
-        const firstStrategy = payload.strategiesBySymbol[firstSymbol]?.[0] ?? "peak";
+        const firstTimeframe =
+          payload.timeframesBySymbol[firstSymbol]?.[0] ?? "";
+        const firstStrategy =
+          payload.strategiesBySymbol[firstSymbol]?.[0] ?? "peak";
 
         setSymbol(firstSymbol);
         setTimeframe(firstTimeframe);
         setStrategy(firstStrategy);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Error cargando metadata";
+        const message =
+          err instanceof Error ? err.message : "Error cargando metadata";
         setError(message);
       } finally {
         setMetaLoading(false);
@@ -345,6 +403,12 @@ export default function BacktestingPage() {
     return () => clearInterval(timer);
   }, [playing, run, speedMs]);
 
+  useEffect(() => {
+    if (portfolioDetailOpen) {
+      setPortfolioDetailTab("summary");
+    }
+  }, [portfolioDetailOpen, selectedPortfolioRow]);
+
   const runBacktest = async () => {
     if (!symbol || !timeframe || !strategy) return;
 
@@ -372,7 +436,9 @@ export default function BacktestingPage() {
         const response = await fetch(buildCandlesUrl(tf));
         if (!response.ok) {
           const message = await response.text();
-          throw new Error(message || `No se pudieron cargar velas (${response.status})`);
+          throw new Error(
+            message || `No se pudieron cargar velas (${response.status})`,
+          );
         }
         return (await response.json()) as BacktestCandlesResponse;
       };
@@ -424,8 +490,13 @@ export default function BacktestingPage() {
       }
 
       const totalTrades = simulatedTrades.length;
-      const winningTrades = simulatedTrades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
-      const totalPnlPoints = simulatedTrades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+      const winningTrades = simulatedTrades.filter(
+        (trade) => (trade.pnl_points ?? 0) > 0,
+      ).length;
+      const totalPnlPoints = simulatedTrades.reduce(
+        (acc, trade) => acc + (trade.pnl_points ?? 0),
+        0,
+      );
 
       setRun({
         symbol,
@@ -446,7 +517,8 @@ export default function BacktestingPage() {
       setFocusTimeUtc(null);
       setM15FocusRangeUtc(null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Error corriendo backtest";
+      const message =
+        err instanceof Error ? err.message : "Error corriendo backtest";
       setError(message);
       setRun(null);
       setDetailRunM15(null);
@@ -470,19 +542,24 @@ export default function BacktestingPage() {
     setPortfolioCurrentTp(null);
 
     try {
-      const effectiveStrategy: StrategyKey = strategy === "leg_continuation_h4_m15" ? strategy : "leg_continuation_h4_m15";
+      const effectiveStrategy: StrategyKey =
+        strategy === "leg_continuation_h4_m15"
+          ? strategy
+          : "leg_continuation_h4_m15";
       const symbols = [...meta.symbols]
         .sort((a, b) => a.localeCompare(b))
         .filter((item) => {
           const tfs = meta.timeframesBySymbol[item] ?? [];
-        return tfs.includes("H4") && tfs.includes("M15");
+          return tfs.includes("H4") && tfs.includes("M15");
         });
 
       if (symbols.length === 0) {
         throw new Error("No hay pares con H4 y M15 para correr el barrido.");
       }
 
-      const combos = GRID_SL_VALUES.flatMap((slValue) => GRID_TP_VALUES.map((tpValue) => ({ slValue, tpValue })));
+      const combos = GRID_SL_VALUES.flatMap((slValue) =>
+        GRID_TP_VALUES.map((tpValue) => ({ slValue, tpValue })),
+      );
       const totalTests = symbols.length * combos.length;
       setPortfolioProgressTotal(totalTests);
 
@@ -504,8 +581,14 @@ export default function BacktestingPage() {
       let done = 0;
       const processedSymbols: string[] = [];
       for (const symbolItem of symbols) {
-        const paramsH4 = new URLSearchParams({ symbol: symbolItem, timeframe: "H4" });
-        const paramsM15 = new URLSearchParams({ symbol: symbolItem, timeframe: "M15" });
+        const paramsH4 = new URLSearchParams({
+          symbol: symbolItem,
+          timeframe: "H4",
+        });
+        const paramsM15 = new URLSearchParams({
+          symbol: symbolItem,
+          timeframe: "M15",
+        });
         if (start) {
           paramsH4.set("start", start);
           paramsM15.set("start", start);
@@ -529,7 +612,8 @@ export default function BacktestingPage() {
         }
 
         const h4Payload = (await h4Response.json()) as BacktestCandlesResponse;
-        const m15Payload = (await m15Response.json()) as BacktestCandlesResponse;
+        const m15Payload =
+          (await m15Response.json()) as BacktestCandlesResponse;
         const loaded: PortfolioLoadedSymbolData = {
           symbol: symbolItem,
           h4: h4Payload.candles,
@@ -554,8 +638,13 @@ export default function BacktestingPage() {
             tpPoints: tpValue,
           });
 
-          const winningTrades = trades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
-          const totalPnlPoints = trades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+          const winningTrades = trades.filter(
+            (trade) => (trade.pnl_points ?? 0) > 0,
+          ).length;
+          const totalPnlPoints = trades.reduce(
+            (acc, trade) => acc + (trade.pnl_points ?? 0),
+            0,
+          );
 
           row.totalTrades += trades.length;
           row.winningTrades += winningTrades;
@@ -566,7 +655,10 @@ export default function BacktestingPage() {
             row.pairsWithTrades += 1;
           }
 
-          row.winRate = row.totalTrades > 0 ? (row.winningTrades / row.totalTrades) * 100 : 0;
+          row.winRate =
+            row.totalTrades > 0
+              ? (row.winningTrades / row.totalTrades) * 100
+              : 0;
           done += 1;
           setPortfolioProgressDone(done);
           await new Promise((resolve) => setTimeout(resolve, 0));
@@ -575,7 +667,9 @@ export default function BacktestingPage() {
 
       const rows = [...rowsMap.values()]
         .map((row) => {
-          const details: PortfolioInstrumentDetail[] = [...row.symbolTrades.entries()]
+          const details: PortfolioInstrumentDetail[] = [
+            ...row.symbolTrades.entries(),
+          ]
             .map(([symbolName, symbolTrades]) => {
               const monthBuckets = new Map<string, PortfolioTradeDetail[]>();
               for (const trade of symbolTrades) {
@@ -599,15 +693,21 @@ export default function BacktestingPage() {
               const months: PortfolioMonthDetail[] = [...monthBuckets.entries()]
                 .map(([monthKey, monthTrades]) => {
                   const totalTrades = monthTrades.length;
-                  const winningTrades = monthTrades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
-                  const totalPnlPoints = monthTrades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+                  const winningTrades = monthTrades.filter(
+                    (trade) => (trade.pnl_points ?? 0) > 0,
+                  ).length;
+                  const totalPnlPoints = monthTrades.reduce(
+                    (acc, trade) => acc + (trade.pnl_points ?? 0),
+                    0,
+                  );
                   return {
                     monthKey,
                     monthLabel: monthLabelFromKey(monthKey),
                     totalTrades,
                     winningTrades,
                     totalPnlPoints,
-                    winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+                    winRate:
+                      totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
                     trades: monthTrades.sort((a, b) => {
                       const at = Date.parse(tradeMainTime(a) ?? "");
                       const bt = Date.parse(tradeMainTime(b) ?? "");
@@ -621,14 +721,20 @@ export default function BacktestingPage() {
                 .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
 
               const totalTrades = symbolTrades.length;
-              const winningTrades = symbolTrades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
-              const totalPnlPoints = symbolTrades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+              const winningTrades = symbolTrades.filter(
+                (trade) => (trade.pnl_points ?? 0) > 0,
+              ).length;
+              const totalPnlPoints = symbolTrades.reduce(
+                (acc, trade) => acc + (trade.pnl_points ?? 0),
+                0,
+              );
               return {
                 symbol: symbolName,
                 totalTrades,
                 winningTrades,
                 totalPnlPoints,
-                winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+                winRate:
+                  totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
                 months,
               };
             })
@@ -657,7 +763,10 @@ export default function BacktestingPage() {
         rows,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Error ejecutando barrido de portafolio";
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Error ejecutando barrido de portafolio";
       setPortfolioError(message);
       setPortfolioResult(null);
     } finally {
@@ -673,7 +782,10 @@ export default function BacktestingPage() {
     return run.candles.slice(0, Math.max(1, cursor + 1));
   }, [run, cursor]);
 
-  const runtimeCandles = useMemo(() => toRuntimeCandles(visibleCandles), [visibleCandles]);
+  const runtimeCandles = useMemo(
+    () => toRuntimeCandles(visibleCandles),
+    [visibleCandles],
+  );
 
   const visibleLastTimeMs = useMemo(() => {
     const last = visibleCandles[visibleCandles.length - 1];
@@ -748,7 +860,10 @@ export default function BacktestingPage() {
     setFocusTimeUtc(jumpTime);
     setM15FocusRangeUtc(null);
 
-    chartSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    chartSectionRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
   const tradesTotals = useMemo(() => {
     if (!run) {
@@ -829,7 +944,9 @@ export default function BacktestingPage() {
       label: `${indicatorKind.toUpperCase()}(${period})`,
     };
     setMovingAverages((current) => {
-      const exists = current.some((item) => item.kind === next.kind && item.period === next.period);
+      const exists = current.some(
+        (item) => item.kind === next.kind && item.period === next.period,
+      );
       return exists ? current : [...current, next];
     });
   };
@@ -841,15 +958,73 @@ export default function BacktestingPage() {
     return toRuntimeCandles(detailRunM15.candles);
   }, [detailRunM15]);
   const detailFocusTimeUtc = selectedTrade
-    ? selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time ?? null
-    : currentCandle?.time_utc ?? null;
+    ? (selectedTrade.entry_time ??
+      selectedTrade.setup_time ??
+      selectedTrade.exit_time ??
+      null)
+    : (currentCandle?.time_utc ?? null);
   const showM15DetailChart = Boolean(
     run &&
     detailRunM15 &&
     timeframe === "H4" &&
-    strategy === "leg_continuation_h4_m15"
+    strategy === "leg_continuation_h4_m15",
   );
   const isLegContinuationStrategy = strategy === "leg_continuation_h4_m15";
+  const portfolioSummaryStats = useMemo(() => {
+    if (!selectedPortfolioRow) {
+      return null;
+    }
+    const instruments = selectedPortfolioRow.details;
+    const totalInstruments = instruments.length;
+    const totalTrades = instruments.reduce(
+      (acc, item) => acc + item.totalTrades,
+      0,
+    );
+    const totalPnl = instruments.reduce(
+      (acc, item) => acc + item.totalPnlPoints,
+      0,
+    );
+    const weightedWinRate =
+      totalTrades > 0
+        ? (instruments.reduce((acc, item) => acc + item.winningTrades, 0) /
+            totalTrades) *
+          100
+        : 0;
+    const bestInstrument = [...instruments].sort(
+      (a, b) => b.totalPnlPoints - a.totalPnlPoints,
+    )[0];
+    return {
+      totalInstruments,
+      totalTrades,
+      totalPnl,
+      weightedWinRate,
+      bestInstrument,
+    };
+  }, [selectedPortfolioRow]);
+  const portfolioMonthlyPnlData = useMemo(() => {
+    if (!selectedPortfolioRow) {
+      return [] as Array<{ month: string; pnl: number }>;
+    }
+
+    const monthlyTotals = new Map<string, { label: string; pnl: number }>();
+    for (const instrument of selectedPortfolioRow.details) {
+      for (const month of instrument.months) {
+        const current = monthlyTotals.get(month.monthKey) ?? {
+          label: month.monthLabel,
+          pnl: 0,
+        };
+        current.pnl += month.totalPnlPoints;
+        monthlyTotals.set(month.monthKey, current);
+      }
+    }
+
+    return [...monthlyTotals.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, value]) => ({
+        month: value.label,
+        pnl: Number(value.pnl.toFixed(2)),
+      }));
+  }, [selectedPortfolioRow]);
 
   return (
     <div className="space-y-5">
@@ -857,421 +1032,575 @@ export default function BacktestingPage() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-background/65 px-4 py-4 md:px-5">
           <div>
             <span className="premium-chip bg-accent/45">Simulation Lab</span>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight">Backtesting</h1>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+              Backtesting
+            </h1>
             <p className="text-sm text-muted-foreground">
-              Reproduce tus estrategias visualmente con los CSV de <code>/data</code>.
+              Reproduce tus estrategias visualmente con los CSV de{" "}
+              <code>/data</code>.
             </p>
           </div>
           <Button
             type="button"
             variant="outline"
             className="h-11 min-w-[240px] justify-between border-primary/20 bg-primary/5 text-primary hover:bg-primary/10"
-            onClick={() => setViewMode((current) => (current === "single" ? "portfolio" : "single"))}
+            onClick={() =>
+              setViewMode((current) =>
+                current === "single" ? "portfolio" : "single",
+              )
+            }
           >
             <span className="inline-flex items-center gap-2">
               <Layers3 className="h-4 w-4" />
-              {viewMode === "single" ? PORTFOLIO_VIEW_NAME : "Backtesting Individual"}
+              {viewMode === "single"
+                ? PORTFOLIO_VIEW_NAME
+                : "Backtesting Individual"}
             </span>
-            {viewMode === "single" ? <ArrowRight className="h-4 w-4" /> : <ArrowLeft className="h-4 w-4" />}
+            {viewMode === "single" ? (
+              <ArrowRight className="h-4 w-4" />
+            ) : (
+              <ArrowLeft className="h-4 w-4" />
+            )}
           </Button>
         </div>
       </div>
 
       <div className="relative min-w-0 overflow-hidden">
-        <div
-          className={cn(
-            "w-full min-w-0"
-          )}
-        >
+        <div className={cn("w-full min-w-0")}>
           <div
             className={cn(
               "min-w-0 space-y-5 pr-0 md:pr-2",
-              viewMode === "single" ? "animate-in slide-in-from-right-4 duration-300" : "hidden"
+              viewMode === "single"
+                ? "animate-in slide-in-from-right-4 duration-300"
+                : "hidden",
             )}
           >
-
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-border/70 bg-background/55">
-          <CardTitle>Configuracion</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 px-4 py-4 md:px-5">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <div className="space-y-2">
-              <div className="text-xs uppercase text-muted-foreground">Symbol</div>
-              <Select value={symbol} onValueChange={setSymbol} disabled={metaLoading || !meta}>
-                <SelectTrigger className="w-full bg-background/85">
-                  <SelectValue placeholder="Selecciona symbol" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(meta?.symbols ?? []).map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs uppercase text-muted-foreground">Timeframe</div>
-              <Select value={timeframe} onValueChange={setTimeframe} disabled={!symbol || availableTimeframes.length === 0}>
-                <SelectTrigger className="w-full bg-background/85">
-                  <SelectValue placeholder="Selecciona timeframe" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableTimeframes.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {item}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs uppercase text-muted-foreground">Estrategia</div>
-              <Select
-                value={strategy}
-                onValueChange={(value: StrategyKey) => setStrategy(value)}
-                disabled={!symbol || availableStrategies.length === 0}
-              >
-                <SelectTrigger className="w-full bg-background/85">
-                  <SelectValue placeholder="Selecciona estrategia" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableStrategies.map((item) => (
-                    <SelectItem key={item} value={item}>
-                      {STRATEGY_LABELS[item]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs uppercase text-muted-foreground">Start (opcional)</div>
-              <Input value={start} onChange={(event) => setStart(event.target.value)} placeholder="2025-03-01" />
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs uppercase text-muted-foreground">End (opcional)</div>
-              <Input value={end} onChange={(event) => setEnd(event.target.value)} placeholder="2025-03-31" />
-            </div>
-
-          </div>
-
-          <div className="premium-toolbar flex flex-wrap items-center gap-2">
-            <Button className="bg-white/95 text-slate-800 hover:bg-white" onClick={runBacktest} disabled={loadingRun || !symbol || !timeframe || !strategy}>
-              {loadingRun ? "Cargando..." : "Correr backtest"}
-            </Button>
-            <span className="text-xs text-primary-foreground/85">
-              Simulacion cliente: {symbol || "-"} {timeframe || "-"} | {STRATEGY_LABELS[strategy]}
-              {strategy === "leg_continuation_h4_m15" ? ` | SL ${Math.max(1, Math.floor(slPoints))} | TP ${Math.max(1, Math.floor(tpPoints))}` : ""}
-            </span>
-            <div className="ml-auto">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button type="button" variant="outline" className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/18">
-                    Stops: SL {Math.max(1, Math.floor(slPoints))} | TP {Math.max(1, Math.floor(tpPoints))}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-72 space-y-3 rounded-xl border-border/80 bg-popover/98" align="end">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs uppercase text-muted-foreground">SL points</div>
-                    <Input
-                      className="h-9 w-28"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={slPoints}
-                      onChange={(event) => {
-                        const next = Number(event.target.value);
-                        if (!Number.isNaN(next) && Number.isFinite(next)) {
-                          setSlPoints(next);
-                        }
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs uppercase text-muted-foreground">TP points</div>
-                    <Input
-                      className="h-9 w-28"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={tpPoints}
-                      onChange={(event) => {
-                        const next = Number(event.target.value);
-                        if (!Number.isNaN(next) && Number.isFinite(next)) {
-                          setTpPoints(next);
-                        }
-                      }}
-                    />
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {error ? <div className="premium-panel border-destructive/35 bg-destructive/5 p-3 text-sm text-destructive">{error}</div> : null}
-
-      {run ? (
-        <>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Card className="border-border/75 bg-card/95">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-muted-foreground">Velas</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{run.candles.length}</CardContent>
-            </Card>
-            <Card className="border-border/75 bg-card/95">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-muted-foreground">Trades</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{run.summary.totalTrades}</CardContent>
-            </Card>
-            <Card className="border-border/75 bg-card/95">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-muted-foreground">Win rate</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{run.summary.winRate.toFixed(2)}%</CardContent>
-            </Card>
-            <Card className="border-border/75 bg-card/95">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-muted-foreground">PnL total</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{fmtPnl(run.summary.totalPnlPoints)}</CardContent>
-            </Card>
-          </div>
-
-          <Card ref={chartSectionRef} className="min-w-0 overflow-hidden">
-            <CardHeader className="border-b border-border/70 bg-background/55">
-              <CardTitle>Playback</CardTitle>
-            </CardHeader>
-            <CardContent className="min-w-0 space-y-3 px-4 py-4 md:px-5">
-              <div className="premium-toolbar flex flex-wrap items-center gap-2">
-                <Button
-                  variant="default"
-                  className="bg-white/95 text-slate-800 hover:bg-white"
-                  onClick={() => setPlaying(true)}
-                  disabled={playing || visibleCandles.length === 0 || cursor >= run.candles.length - 1}
-                >
-                  Play
-                </Button>
-                <Button variant="secondary" onClick={() => setPlaying(false)} disabled={!playing}>
-                  Pause
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
-                  onClick={() => {
-                    setPlaying(false);
-                    setCursor(0);
-                  }}
-                >
-                  Reset
-                </Button>
-                <Button
-                  variant="outline"
-                  className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
-                  onClick={() => {
-                    setPlaying(false);
-                    setCursor((prev) => Math.min(prev + 1, run.candles.length - 1));
-                  }}
-                  disabled={cursor >= run.candles.length - 1}
-                >
-                  Step +1
-                </Button>
-                <div className="ml-2 flex items-center gap-2 text-xs text-primary-foreground/85">
-                  <span>Velocidad (ms)</span>
-                  <Input
-                    className="h-8 w-24 border-white/20 bg-white/95 text-slate-700"
-                    type="number"
-                    min={30}
-                    max={3000}
-                    step={10}
-                    value={speedMs}
-                    onChange={(event) => {
-                      const next = Number(event.target.value);
-                      if (!Number.isNaN(next) && Number.isFinite(next)) {
-                        setSpeedMs(Math.max(30, Math.min(3000, Math.floor(next))));
-                      }
-                    }}
-                  />
-                </div>
-                <Button
-                  variant="outline"
-                  className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
-                  onClick={() => setIndicatorsModalOpen(true)}
-                >
-                  Indicadores {movingAverages.length > 0 ? `(${movingAverages.length})` : ""}
-                </Button>
-              </div>
-
-              <div className="break-words text-xs text-muted-foreground">
-                Barra {Math.min(cursor + 1, run.candles.length)}/{run.candles.length} | Candle actual: {fmtDate(currentCandle?.time_utc)}
-              </div>
-
-              <RuntimePixiChart
-                title={`${run.symbol} backtest (${STRATEGY_LABELS[run.strategy]})`}
-                timeframeLabel={run.timeframe}
-                stageLabel={playing ? "Playback running" : "Playback paused"}
-                symbol=""
-                dataMode="historical"
-                useWebSocket={false}
-                height={520}
-                candlesFallback={chartCandles}
-                showLegLabels={isLegContinuationStrategy}
-                tradeMarkers={tradeMarkers}
-                selectedTradeHighlight={selectedTrade ? {
-                  start_time: selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time,
-                  end_time: selectedTrade.exit_time ?? selectedTrade.entry_time ?? selectedTrade.setup_time,
-                  entry: selectedTrade.entry,
-                  exit: selectedTrade.exit,
-                  side: selectedTrade.side,
-                } : null}
-                focusTimeUtc={focusTimeUtc}
-                movingAverages={movingAverages}
-                onDeselectSelectedTrade={() => {
-                  setSelectedTradeId(null);
-                  setFocusTimeUtc(null);
-                  setM15FocusRangeUtc(null);
-                }}
-                onLegBoxClick={(leg) => {
-                  if (!showM15DetailChart) return;
-                  setPlaying(false);
-                  setSelectedTradeId(null);
-                  setFocusTimeUtc(leg.startTimeUtc);
-                  setM15FocusRangeUtc({
-                    startTimeUtc: leg.startTimeUtc,
-                    endExclusiveTimeUtc: leg.endExclusiveTimeUtc,
-                  });
-                  m15SectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }}
-              />
-
-              <div className="text-xs text-muted-foreground">
-                Marcadores: <b>B</b> buy entry, <b>S</b> sell entry, <b>P</b> profit, <b>L</b> loss.
-              </div>
-            </CardContent>
-          </Card>
-
-          {showM15DetailChart ? (
-            <Card ref={m15SectionRef} className="min-w-0 overflow-hidden">
+            <Card className="overflow-hidden">
               <CardHeader className="border-b border-border/70 bg-background/55">
-                <CardTitle>Detalle M15 (contexto de entrada/salida)</CardTitle>
+                <CardTitle>Configuracion</CardTitle>
               </CardHeader>
-              <CardContent className="min-w-0 space-y-3 px-4 py-4 md:px-5">
-                <RuntimePixiChart
-                  title={`${run.symbol} detalle M15`}
-                  timeframeLabel="M15"
-                  stageLabel={selectedTrade ? "Trade seleccionado" : "Seguimiento por playback"}
-                  symbol=""
-                  dataMode="historical"
-                  useWebSocket={false}
-                  height={420}
-                  candlesFallback={detailChartCandlesM15}
-                  showLegLabels={isLegContinuationStrategy}
-                  overlayStructureFromTimeframe="H4"
-                  overlayStructureCandlesFallback={chartCandles}
-                  tradeMarkers={selectedTrade ? selectedTradeMarkers : tradeMarkers}
-                  selectedTradeHighlight={selectedTrade ? {
-                    start_time: selectedTrade.entry_time ?? selectedTrade.setup_time ?? selectedTrade.exit_time,
-                    end_time: selectedTrade.exit_time ?? selectedTrade.entry_time ?? selectedTrade.setup_time,
-                    entry: selectedTrade.entry,
-                    exit: selectedTrade.exit,
-                    side: selectedTrade.side,
-                  } : null}
-                  focusTimeUtc={detailFocusTimeUtc}
-                  focusRangeUtc={m15FocusRangeUtc}
-                  movingAverages={movingAverages}
-                />
-                <div className="text-xs text-muted-foreground">
-                  Esta vista te permite ver en M15 exactamente donde y como se activa la operacion definida en H4.
+              <CardContent className="space-y-4 px-4 py-4 md:px-5">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Symbol
+                    </div>
+                    <Select
+                      value={symbol}
+                      onValueChange={setSymbol}
+                      disabled={metaLoading || !meta}
+                    >
+                      <SelectTrigger className="w-full bg-background/85">
+                        <SelectValue placeholder="Selecciona symbol" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(meta?.symbols ?? []).map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Timeframe
+                    </div>
+                    <Select
+                      value={timeframe}
+                      onValueChange={setTimeframe}
+                      disabled={!symbol || availableTimeframes.length === 0}
+                    >
+                      <SelectTrigger className="w-full bg-background/85">
+                        <SelectValue placeholder="Selecciona timeframe" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableTimeframes.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {item}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Estrategia
+                    </div>
+                    <Select
+                      value={strategy}
+                      onValueChange={(value: StrategyKey) => setStrategy(value)}
+                      disabled={!symbol || availableStrategies.length === 0}
+                    >
+                      <SelectTrigger className="w-full bg-background/85">
+                        <SelectValue placeholder="Selecciona estrategia" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableStrategies.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {STRATEGY_LABELS[item]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Start (opcional)
+                    </div>
+                    <Input
+                      value={start}
+                      onChange={(event) => setStart(event.target.value)}
+                      placeholder="2025-03-01"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      End (opcional)
+                    </div>
+                    <Input
+                      value={end}
+                      onChange={(event) => setEnd(event.target.value)}
+                      placeholder="2025-03-31"
+                    />
+                  </div>
+                </div>
+
+                <div className="premium-toolbar flex flex-wrap items-center gap-2">
+                  <Button
+                    className="bg-white/95 text-slate-800 hover:bg-white"
+                    onClick={runBacktest}
+                    disabled={loadingRun || !symbol || !timeframe || !strategy}
+                  >
+                    {loadingRun ? "Cargando..." : "Correr backtest"}
+                  </Button>
+                  <span className="text-xs text-primary-foreground/85">
+                    Simulacion cliente: {symbol || "-"} {timeframe || "-"} |{" "}
+                    {STRATEGY_LABELS[strategy]}
+                    {strategy === "leg_continuation_h4_m15"
+                      ? ` | SL ${Math.max(1, Math.floor(slPoints))} | TP ${Math.max(1, Math.floor(tpPoints))}`
+                      : ""}
+                  </span>
+                  <div className="ml-auto">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/18"
+                        >
+                          Stops: SL {Math.max(1, Math.floor(slPoints))} | TP{" "}
+                          {Math.max(1, Math.floor(tpPoints))}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        className="w-72 space-y-3 rounded-xl border-border/80 bg-popover/98"
+                        align="end"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs uppercase text-muted-foreground">
+                            SL points
+                          </div>
+                          <Input
+                            className="h-9 w-28"
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={slPoints}
+                            onChange={(event) => {
+                              const next = Number(event.target.value);
+                              if (
+                                !Number.isNaN(next) &&
+                                Number.isFinite(next)
+                              ) {
+                                setSlPoints(next);
+                              }
+                            }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-xs uppercase text-muted-foreground">
+                            TP points
+                          </div>
+                          <Input
+                            className="h-9 w-28"
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={tpPoints}
+                            onChange={(event) => {
+                              const next = Number(event.target.value);
+                              if (
+                                !Number.isNaN(next) &&
+                                Number.isFinite(next)
+                              ) {
+                                setTpPoints(next);
+                              }
+                            }}
+                          />
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 </div>
               </CardContent>
             </Card>
-          ) : null}
 
-          <Card className="overflow-hidden">
-            <CardHeader className="border-b border-border/70 bg-background/55">
-              <CardTitle>Trades</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 py-4 md:px-5">
-              {run.trades.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No hay trades en el rango seleccionado.</p>
-              ) : (
-                <>
-                  <Accordion type="single" collapsible className="rounded-xl border border-border/75 bg-card/65 px-3">
-                    <AccordionItem value="all-trades">
-                      <AccordionTrigger className="py-3 hover:no-underline">
-                        <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
-                          <span className="text-sm font-medium">
-                            Lista completa de operaciones
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {run.trades.length} trades
-                          </span>
-                        </div>
-                      </AccordionTrigger>
-                      <AccordionContent>
-                        <div className="space-y-2">
-                          {run.trades.map((trade, index) => (
-                            <button
-                              key={trade.id}
-                              type="button"
-                              onClick={() => jumpToTrade(trade)}
-                              className={`w-full rounded-xl border border-border/75 bg-background/70 p-3 text-left text-sm transition-colors ${
-                                selectedTradeId === trade.id
-                                  ? "border-primary/50 bg-primary/10"
-                                  : "hover:bg-muted/50"
-                              }`}
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span className="font-medium">
-                                  Trade #{index + 1} · {String(trade.side).toUpperCase()}
+            {error ? (
+              <div className="premium-panel border-destructive/35 bg-destructive/5 p-3 text-sm text-destructive">
+                {error}
+              </div>
+            ) : null}
+
+            {run ? (
+              <>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <Card className="border-border/75 bg-card/95">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base text-muted-foreground">
+                        Velas
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-2xl font-semibold">
+                      {run.candles.length}
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/75 bg-card/95">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base text-muted-foreground">
+                        Trades
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-2xl font-semibold">
+                      {run.summary.totalTrades}
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/75 bg-card/95">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base text-muted-foreground">
+                        Win rate
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-2xl font-semibold">
+                      {run.summary.winRate.toFixed(2)}%
+                    </CardContent>
+                  </Card>
+                  <Card className="border-border/75 bg-card/95">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base text-muted-foreground">
+                        PnL total
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-2xl font-semibold">
+                      {fmtPnl(run.summary.totalPnlPoints)}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card ref={chartSectionRef} className="min-w-0 overflow-hidden">
+                  <CardHeader className="border-b border-border/70 bg-background/55">
+                    <CardTitle>Playback</CardTitle>
+                  </CardHeader>
+                  <CardContent className="min-w-0 space-y-3 px-4 py-4 md:px-5">
+                    <div className="premium-toolbar flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="default"
+                        className="bg-white/95 text-slate-800 hover:bg-white"
+                        onClick={() => setPlaying(true)}
+                        disabled={
+                          playing ||
+                          visibleCandles.length === 0 ||
+                          cursor >= run.candles.length - 1
+                        }
+                      >
+                        Play
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => setPlaying(false)}
+                        disabled={!playing}
+                      >
+                        Pause
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
+                        onClick={() => {
+                          setPlaying(false);
+                          setCursor(0);
+                        }}
+                      >
+                        Reset
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
+                        onClick={() => {
+                          setPlaying(false);
+                          setCursor((prev) =>
+                            Math.min(prev + 1, run.candles.length - 1),
+                          );
+                        }}
+                        disabled={cursor >= run.candles.length - 1}
+                      >
+                        Step +1
+                      </Button>
+                      <div className="ml-2 flex items-center gap-2 text-xs text-primary-foreground/85">
+                        <span>Velocidad (ms)</span>
+                        <Input
+                          className="h-8 w-24 border-white/20 bg-white/95 text-slate-700"
+                          type="number"
+                          min={30}
+                          max={3000}
+                          step={10}
+                          value={speedMs}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (!Number.isNaN(next) && Number.isFinite(next)) {
+                              setSpeedMs(
+                                Math.max(30, Math.min(3000, Math.floor(next))),
+                              );
+                            }
+                          }}
+                        />
+                      </div>
+                      <Button
+                        variant="outline"
+                        className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
+                        onClick={() => setIndicatorsModalOpen(true)}
+                      >
+                        Indicadores{" "}
+                        {movingAverages.length > 0
+                          ? `(${movingAverages.length})`
+                          : ""}
+                      </Button>
+                    </div>
+
+                    <div className="break-words text-xs text-muted-foreground">
+                      Barra {Math.min(cursor + 1, run.candles.length)}/
+                      {run.candles.length} | Candle actual:{" "}
+                      {fmtDate(currentCandle?.time_utc)}
+                    </div>
+
+                    <RuntimePixiChart
+                      title={`${run.symbol} backtest (${STRATEGY_LABELS[run.strategy]})`}
+                      timeframeLabel={run.timeframe}
+                      stageLabel={
+                        playing ? "Playback running" : "Playback paused"
+                      }
+                      symbol=""
+                      dataMode="historical"
+                      useWebSocket={false}
+                      height={520}
+                      candlesFallback={chartCandles}
+                      showLegLabels={isLegContinuationStrategy}
+                      tradeMarkers={tradeMarkers}
+                      selectedTradeHighlight={
+                        selectedTrade
+                          ? {
+                              start_time:
+                                selectedTrade.entry_time ??
+                                selectedTrade.setup_time ??
+                                selectedTrade.exit_time,
+                              end_time:
+                                selectedTrade.exit_time ??
+                                selectedTrade.entry_time ??
+                                selectedTrade.setup_time,
+                              entry: selectedTrade.entry,
+                              exit: selectedTrade.exit,
+                              side: selectedTrade.side,
+                            }
+                          : null
+                      }
+                      focusTimeUtc={focusTimeUtc}
+                      movingAverages={movingAverages}
+                      onDeselectSelectedTrade={() => {
+                        setSelectedTradeId(null);
+                        setFocusTimeUtc(null);
+                        setM15FocusRangeUtc(null);
+                      }}
+                      onLegBoxClick={(leg) => {
+                        if (!showM15DetailChart) return;
+                        setPlaying(false);
+                        setSelectedTradeId(null);
+                        setFocusTimeUtc(leg.startTimeUtc);
+                        setM15FocusRangeUtc({
+                          startTimeUtc: leg.startTimeUtc,
+                          endExclusiveTimeUtc: leg.endExclusiveTimeUtc,
+                        });
+                        m15SectionRef.current?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                      }}
+                    />
+
+                    <div className="text-xs text-muted-foreground">
+                      Marcadores: <b>B</b> buy entry, <b>S</b> sell entry,{" "}
+                      <b>P</b> profit, <b>L</b> loss.
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {showM15DetailChart ? (
+                  <Card ref={m15SectionRef} className="min-w-0 overflow-hidden">
+                    <CardHeader className="border-b border-border/70 bg-background/55">
+                      <CardTitle>
+                        Detalle M15 (contexto de entrada/salida)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="min-w-0 space-y-3 px-4 py-4 md:px-5">
+                      <RuntimePixiChart
+                        title={`${run.symbol} detalle M15`}
+                        timeframeLabel="M15"
+                        stageLabel={
+                          selectedTrade
+                            ? "Trade seleccionado"
+                            : "Seguimiento por playback"
+                        }
+                        symbol=""
+                        dataMode="historical"
+                        useWebSocket={false}
+                        height={420}
+                        candlesFallback={detailChartCandlesM15}
+                        showLegLabels={isLegContinuationStrategy}
+                        overlayStructureFromTimeframe="H4"
+                        overlayStructureCandlesFallback={chartCandles}
+                        tradeMarkers={
+                          selectedTrade ? selectedTradeMarkers : tradeMarkers
+                        }
+                        selectedTradeHighlight={
+                          selectedTrade
+                            ? {
+                                start_time:
+                                  selectedTrade.entry_time ??
+                                  selectedTrade.setup_time ??
+                                  selectedTrade.exit_time,
+                                end_time:
+                                  selectedTrade.exit_time ??
+                                  selectedTrade.entry_time ??
+                                  selectedTrade.setup_time,
+                                entry: selectedTrade.entry,
+                                exit: selectedTrade.exit,
+                                side: selectedTrade.side,
+                              }
+                            : null
+                        }
+                        focusTimeUtc={detailFocusTimeUtc}
+                        focusRangeUtc={m15FocusRangeUtc}
+                        movingAverages={movingAverages}
+                      />
+                      <div className="text-xs text-muted-foreground">
+                        Esta vista te permite ver en M15 exactamente donde y
+                        como se activa la operacion definida en H4.
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
+                <Card className="overflow-hidden">
+                  <CardHeader className="border-b border-border/70 bg-background/55">
+                    <CardTitle>Trades</CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-4 py-4 md:px-5">
+                    {run.trades.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        No hay trades en el rango seleccionado.
+                      </p>
+                    ) : (
+                      <>
+                        <Accordion
+                          type="single"
+                          collapsible
+                          className="rounded-xl border border-border/75 bg-card/65 px-3"
+                        >
+                          <AccordionItem value="all-trades">
+                            <AccordionTrigger className="py-3 hover:no-underline">
+                              <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
+                                <span className="text-sm font-medium">
+                                  Lista completa de operaciones
                                 </span>
                                 <span className="text-xs text-muted-foreground">
-                                  {trade.result ?? "-"} · {fmtPnl(trade.pnl_points)}
+                                  {run.trades.length} trades
                                 </span>
                               </div>
-                              <div className="mt-1 grid gap-1 text-xs text-muted-foreground md:grid-cols-4">
-                                <div>Entry: {fmtDate(trade.entry_time)} @ {fmtPrice(trade.entry)}</div>
-                                <div>Exit: {fmtDate(trade.exit_time)} @ {fmtPrice(trade.exit)}</div>
-                                <div>Setup: {fmtDate(trade.setup_time)}</div>
-                                <div>PnL: {fmtPnl(trade.pnl_points)}</div>
+                            </AccordionTrigger>
+                            <AccordionContent>
+                              <div className="space-y-2">
+                                {run.trades.map((trade, index) => (
+                                  <button
+                                    key={trade.id}
+                                    type="button"
+                                    onClick={() => jumpToTrade(trade)}
+                                    className={`w-full rounded-xl border border-border/75 bg-background/70 p-3 text-left text-sm transition-colors ${
+                                      selectedTradeId === trade.id
+                                        ? "border-primary/50 bg-primary/10"
+                                        : "hover:bg-muted/50"
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="font-medium">
+                                        Trade #{index + 1} ·{" "}
+                                        {String(trade.side).toUpperCase()}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {trade.result ?? "-"} ·{" "}
+                                        {fmtPnl(trade.pnl_points)}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 grid gap-1 text-xs text-muted-foreground md:grid-cols-4">
+                                      <div>
+                                        Entry: {fmtDate(trade.entry_time)} @{" "}
+                                        {fmtPrice(trade.entry)}
+                                      </div>
+                                      <div>
+                                        Exit: {fmtDate(trade.exit_time)} @{" "}
+                                        {fmtPrice(trade.exit)}
+                                      </div>
+                                      <div>
+                                        Setup: {fmtDate(trade.setup_time)}
+                                      </div>
+                                      <div>PnL: {fmtPnl(trade.pnl_points)}</div>
+                                    </div>
+                                  </button>
+                                ))}
                               </div>
-                            </button>
-                          ))}
-                        </div>
-                      </AccordionContent>
-                    </AccordionItem>
-                  </Accordion>
+                            </AccordionContent>
+                          </AccordionItem>
+                        </Accordion>
 
-                  <div className="mt-4 rounded-xl border border-border/75 bg-secondary/35 p-3 text-xs">
-                    <div className="mb-2 font-medium text-foreground">Resumen total</div>
-                    <div className="grid gap-2 md:grid-cols-4">
-                      <div>Total trades: {run.trades.length}</div>
-                      <div>Ganadoras: {tradesTotals.wins}</div>
-                      <div>Perdedoras: {tradesTotals.losses}</div>
-                      <div>Neutras: {tradesTotals.neutral}</div>
-                      <div className="md:col-span-4">PnL acumulado: {fmtPnl(tradesTotals.pnl)}</div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </>
-      ) : null}
+                        <div className="mt-4 rounded-xl border border-border/75 bg-secondary/35 p-3 text-xs">
+                          <div className="mb-2 font-medium text-foreground">
+                            Resumen total
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-4">
+                            <div>Total trades: {run.trades.length}</div>
+                            <div>Ganadoras: {tradesTotals.wins}</div>
+                            <div>Perdedoras: {tradesTotals.losses}</div>
+                            <div>Neutras: {tradesTotals.neutral}</div>
+                            <div className="md:col-span-4">
+                              PnL acumulado: {fmtPnl(tradesTotals.pnl)}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              </>
+            ) : null}
           </div>
 
           <div
             className={cn(
               "min-w-0 space-y-5 pl-0 md:pl-2",
-              viewMode === "portfolio" ? "animate-in slide-in-from-left-4 duration-300" : "hidden"
+              viewMode === "portfolio"
+                ? "animate-in slide-in-from-left-4 duration-300"
+                : "hidden",
             )}
           >
             <Card className="overflow-hidden">
@@ -1280,7 +1609,9 @@ export default function BacktestingPage() {
               </CardHeader>
               <CardContent className="space-y-4 px-4 py-4 md:px-5">
                 <p className="text-sm text-muted-foreground">
-                  Ejecuta la estrategia en todos los pares disponibles para el rango de fecha seleccionado y evalua todas las combinaciones TP/SL.
+                  Ejecuta la estrategia en todos los pares disponibles para el
+                  rango de fecha seleccionado y evalua todas las combinaciones
+                  TP/SL.
                 </p>
 
                 <div className="premium-toolbar flex flex-wrap items-center gap-2">
@@ -1290,17 +1621,26 @@ export default function BacktestingPage() {
                     onClick={runPortfolioBacktest}
                     disabled={portfolioLoading}
                   >
-                    {portfolioLoading ? "Corriendo barrido..." : `Correr ${PORTFOLIO_VIEW_NAME}`}
+                    {portfolioLoading
+                      ? "Corriendo barrido..."
+                      : `Correr ${PORTFOLIO_VIEW_NAME}`}
                   </Button>
                   <span className="text-xs text-primary-foreground/85">
-                    Motor: {STRATEGY_LABELS["leg_continuation_h4_m15"]} | Fecha: {start || "-"} {"->"} {end || "-"}
+                    Motor: {STRATEGY_LABELS["leg_continuation_h4_m15"]} | Fecha:{" "}
+                    {start || "-"} {"->"} {end || "-"}
                   </span>
                   <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-primary-foreground">
-                    Progreso: {fmtCount(portfolioProgressDone)}/{fmtCount(portfolioProgressTotal || GRID_SL_VALUES.length * GRID_TP_VALUES.length)}
+                    Progreso: {fmtCount(portfolioProgressDone)}/
+                    {fmtCount(
+                      portfolioProgressTotal ||
+                        GRID_SL_VALUES.length * GRID_TP_VALUES.length,
+                    )}
                   </span>
                   {portfolioLoading ? (
                     <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-primary-foreground">
-                      Probando: {portfolioCurrentSymbol ?? "-"} | SL {portfolioCurrentSl ?? "-"} | TP {portfolioCurrentTp ?? "-"}
+                      Probando: {portfolioCurrentSymbol ?? "-"} | SL{" "}
+                      {portfolioCurrentSl ?? "-"} | TP{" "}
+                      {portfolioCurrentTp ?? "-"}
                     </span>
                   ) : null}
                   <Button
@@ -1315,19 +1655,31 @@ export default function BacktestingPage() {
 
                 <div className="grid gap-3 md:grid-cols-3">
                   <div className="rounded-xl border border-border/75 bg-card/85 p-3">
-                    <div className="text-xs uppercase text-muted-foreground">Combinaciones</div>
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Combinaciones
+                    </div>
                     <div className="mt-1 text-xl font-semibold">
-                      {portfolioResult ? fmtCount(portfolioResult.combinations) : "70"}
+                      {portfolioResult
+                        ? fmtCount(portfolioResult.combinations)
+                        : "70"}
                     </div>
                   </div>
                   <div className="rounded-xl border border-border/75 bg-card/85 p-3">
-                    <div className="text-xs uppercase text-muted-foreground">Pares evaluados</div>
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Pares evaluados
+                    </div>
                     <div className="mt-1 text-xl font-semibold">
-                      {portfolioResult ? fmtCount(portfolioResult.symbols.length) : portfolioLoading ? "..." : "-"}
+                      {portfolioResult
+                        ? fmtCount(portfolioResult.symbols.length)
+                        : portfolioLoading
+                          ? "..."
+                          : "-"}
                     </div>
                   </div>
                   <div className="rounded-xl border border-border/75 bg-card/85 p-3">
-                    <div className="text-xs uppercase text-muted-foreground">Grid TP</div>
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Grid TP
+                    </div>
                     <div className="mt-1 text-sm">
                       40, 60, 80, 100, 200, 250, 300, 400, 500, 600
                     </div>
@@ -1342,7 +1694,8 @@ export default function BacktestingPage() {
 
                 {!portfolioResult && !portfolioLoading ? (
                   <div className="rounded-xl border border-border/75 bg-secondary/35 p-4 text-sm text-muted-foreground">
-                    Corre el barrido para ver la tabla agregada por combinacion TP/SL.
+                    Corre el barrido para ver la tabla agregada por combinacion
+                    TP/SL.
                   </div>
                 ) : null}
 
@@ -1351,13 +1704,27 @@ export default function BacktestingPage() {
                     <Table className="w-full table-fixed text-xs">
                       <TableHeader>
                         <TableRow className="border-b bg-secondary/45 hover:bg-secondary/45">
-                          <TableHead className="h-9 px-2 text-[10px] font-semibold uppercase tracking-[0.02em]">SL</TableHead>
-                          <TableHead className="h-9 px-2 text-[10px] font-semibold uppercase tracking-[0.02em]">TP</TableHead>
-                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Trades</TableHead>
-                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Win rate</TableHead>
-                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">PnL total</TableHead>
-                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Pares c/ trade</TableHead>
-                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Pares evaluados</TableHead>
+                          <TableHead className="h-9 px-2 text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            SL
+                          </TableHead>
+                          <TableHead className="h-9 px-2 text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            TP
+                          </TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            Trades
+                          </TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            Win rate
+                          </TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            PnL total
+                          </TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            Pares c/ trade
+                          </TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">
+                            Pares evaluados
+                          </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -1379,13 +1746,27 @@ export default function BacktestingPage() {
                               }
                             }}
                           >
-                            <TableCell className="px-2 py-2 font-medium">{row.slPoints}</TableCell>
-                            <TableCell className="px-2 py-2 font-medium">{row.tpPoints}</TableCell>
-                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtCount(row.totalTrades)}</TableCell>
-                            <TableCell className="px-2 py-2 text-right tabular-nums">{row.winRate.toFixed(2)}%</TableCell>
-                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtPnl(row.totalPnlPoints)}</TableCell>
-                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtCount(row.pairsWithTrades)}</TableCell>
-                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtCount(row.pairsProcessed)}</TableCell>
+                            <TableCell className="px-2 py-2 font-medium">
+                              {row.slPoints}
+                            </TableCell>
+                            <TableCell className="px-2 py-2 font-medium">
+                              {row.tpPoints}
+                            </TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">
+                              {fmtCount(row.totalTrades)}
+                            </TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">
+                              {row.winRate.toFixed(2)}%
+                            </TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">
+                              {fmtPnl(row.totalPnlPoints)}
+                            </TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">
+                              {fmtCount(row.pairsWithTrades)}
+                            </TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">
+                              {fmtCount(row.pairsProcessed)}
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -1399,15 +1780,20 @@ export default function BacktestingPage() {
       </div>
 
       <Dialog open={portfolioDetailOpen} onOpenChange={setPortfolioDetailOpen}>
-        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden rounded-2xl border-border/80 bg-background/95 p-0 sm:max-w-6xl">
+        <DialogContent className="flex max-h-[95vh] flex-col overflow-hidden rounded-2xl border-border/80 bg-background/95 p-0 sm:max-w-[96vw]">
           <DialogHeader>
             <div className="border-b border-border/70 px-6 py-5">
-              <span className="premium-chip bg-accent/45">Detalle de Combinacion</span>
+              <span className="premium-chip bg-accent/45">
+                Detalle de Combinacion
+              </span>
               <DialogTitle className="mt-2">
-                {selectedPortfolioRow ? `SL ${selectedPortfolioRow.slPoints} / TP ${selectedPortfolioRow.tpPoints}` : "Detalle"}
+                {selectedPortfolioRow
+                  ? `SL ${selectedPortfolioRow.slPoints} / TP ${selectedPortfolioRow.tpPoints}`
+                  : "Detalle"}
               </DialogTitle>
               <DialogDescription className="mt-1">
-                Organizado por instrumento y por mes. Dentro de cada mes se listan todos los trades.
+                Organizado por instrumento y por mes. Dentro de cada mes se
+                listan todos los trades.
               </DialogDescription>
             </div>
           </DialogHeader>
@@ -1422,68 +1808,452 @@ export default function BacktestingPage() {
                 No hay detalle disponible para esta combinacion.
               </div>
             ) : (
-              <Accordion type="multiple" className="space-y-2">
-                {selectedPortfolioRow.details.map((instrumentDetail) => (
-                  <AccordionItem
-                    key={`${selectedPortfolioRow.slPoints}-${selectedPortfolioRow.tpPoints}-${instrumentDetail.symbol}`}
-                    value={`instrument-${instrumentDetail.symbol}`}
-                    className="rounded-xl border border-border/75 bg-card/70 px-3"
-                  >
-                    <AccordionTrigger className="py-3 hover:no-underline">
-                      <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
-                        <span className="text-sm font-semibold">{instrumentDetail.symbol}</span>
-                        <span className="text-xs text-muted-foreground">
-                          Trades {fmtCount(instrumentDetail.totalTrades)} | Win {instrumentDetail.winRate.toFixed(2)}% | PnL {fmtPnl(instrumentDetail.totalPnlPoints)}
-                        </span>
+              <Tabs
+                value={portfolioDetailTab}
+                onValueChange={setPortfolioDetailTab}
+                className="space-y-0"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-primary px-3 py-2">
+                  <div className="scrollbar-none w-full flex-1 overflow-x-auto overflow-y-hidden">
+                    <TabsList className="h-auto w-max min-w-max flex-nowrap justify-start gap-1 bg-transparent p-0 pr-2">
+                      <TabsTrigger
+                        value="summary"
+                        className="h-9 rounded-xl border border-white/12 bg-black/25 px-3 py-1.5 text-xs text-primary-foreground/90 data-[state=active]:border-background data-[state=active]:bg-background data-[state=active]:text-foreground"
+                      >
+                        Overview
+                      </TabsTrigger>
+                      {selectedPortfolioRow.details.map((instrumentDetail) => (
+                        <TabsTrigger
+                          key={`tab-${instrumentDetail.symbol}`}
+                          value={instrumentDetail.symbol}
+                          className="h-9 rounded-xl border border-white/12 bg-black/25 px-3 py-1.5 text-xs text-primary-foreground/90 data-[state=active]:border-background data-[state=active]:bg-background data-[state=active]:text-foreground"
+                        >
+                          {instrumentDetail.symbol}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-9 items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs text-primary-foreground/85">
+                      <Search className="h-3.5 w-3.5" />
+                      Search by trade or ID
+                    </div>
+                    <button
+                      type="button"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3 text-xs text-primary-foreground/85"
+                    >
+                      <Filter className="h-3.5 w-3.5" />
+                      Filter
+                    </button>
+                  </div>
+                </div>
+
+                <TabsContent
+                  value="summary"
+                  className="-mt-1 space-y-2 rounded-2xl border border-border/75 bg-background px-3 pt-3 pb-3"
+                >
+                  {portfolioSummaryStats ? (
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          Instrumentos
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {fmtCount(portfolioSummaryStats.totalInstruments)}
+                        </div>
                       </div>
-                    </AccordionTrigger>
-                    <AccordionContent className="pb-3">
-                      <Accordion type="multiple" className="space-y-2">
-                        {instrumentDetail.months.map((monthDetail) => (
-                          <AccordionItem
-                            key={`${instrumentDetail.symbol}-${monthDetail.monthKey}`}
-                            value={`month-${instrumentDetail.symbol}-${monthDetail.monthKey}`}
-                            className="rounded-xl border border-border/70 bg-background/70 px-3"
-                          >
-                            <AccordionTrigger className="py-2.5 hover:no-underline">
-                              <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
-                                <span className="text-sm font-medium">{monthDetail.monthLabel}</span>
-                                <span className="text-xs text-muted-foreground">
-                                  Trades {fmtCount(monthDetail.totalTrades)} | Win {monthDetail.winRate.toFixed(2)}% | PnL {fmtPnl(monthDetail.totalPnlPoints)}
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          Trades totales
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {fmtCount(portfolioSummaryStats.totalTrades)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          Win rate global
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {portfolioSummaryStats.weightedWinRate.toFixed(2)}%
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          PnL total
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {fmtPnl(portfolioSummaryStats.totalPnl)}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                      <div className="mb-2 text-sm font-medium">
+                        PnL por instrumento
+                      </div>
+                      <ChartContainer
+                        config={summaryPnlChartConfig}
+                        className="!aspect-auto h-[220px] min-h-[220px] w-full"
+                      >
+                        <BarChart
+                          data={(selectedPortfolioRow?.details ?? []).map(
+                            (item) => ({
+                              symbol: item.symbol,
+                              pnl: Number(item.totalPnlPoints.toFixed(2)),
+                            }),
+                          )}
+                        >
+                          <CartesianGrid vertical={false} />
+                          <XAxis
+                            dataKey="symbol"
+                            tickLine={false}
+                            axisLine={false}
+                            interval="preserveStartEnd"
+                            minTickGap={14}
+                            angle={-18}
+                            textAnchor="end"
+                            height={56}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            width={70}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Bar
+                            dataKey="pnl"
+                            radius={[6, 6, 0, 0]}
+                            fill="var(--color-pnl)"
+                          />
+                        </BarChart>
+                      </ChartContainer>
+                    </div>
+                    <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                      <div className="mb-2 text-sm font-medium">
+                        PnL por mes
+                      </div>
+                      <ChartContainer
+                        config={summaryMonthlyPnlChartConfig}
+                        className="!aspect-auto h-[220px] min-h-[220px] w-full"
+                      >
+                        <BarChart data={portfolioMonthlyPnlData}>
+                          <CartesianGrid vertical={false} />
+                          <XAxis
+                            dataKey="month"
+                            tickLine={false}
+                            axisLine={false}
+                            interval="preserveStartEnd"
+                            minTickGap={18}
+                            angle={-20}
+                            textAnchor="end"
+                            height={56}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            width={70}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Bar
+                            dataKey="pnl"
+                            radius={[6, 6, 0, 0]}
+                            fill="var(--color-pnl)"
+                          />
+                        </BarChart>
+                      </ChartContainer>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-b-2xl rounded-tr-2xl border border-border/75 bg-card">
+                    <Table className="w-full text-sm">
+                      <TableHeader>
+                        <TableRow className="border-b bg-secondary/35 hover:bg-secondary/35">
+                          <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            Activity
+                          </TableHead>
+                          <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            Symbol
+                          </TableHead>
+                          <TableHead className="h-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            Trades
+                          </TableHead>
+                          <TableHead className="h-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            Win Rate
+                          </TableHead>
+                          <TableHead className="h-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            PnL Total
+                          </TableHead>
+                          <TableHead className="h-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            Months
+                          </TableHead>
+                          <TableHead className="h-10 w-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                            ...
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {selectedPortfolioRow.details.map(
+                          (instrumentDetail) => (
+                            <TableRow
+                              key={`summary-${instrumentDetail.symbol}`}
+                              className="odd:bg-card even:bg-secondary/15 hover:bg-secondary/30"
+                            >
+                              <TableCell className="px-3 py-2 font-medium">
+                                Portfolio
+                              </TableCell>
+                              <TableCell className="px-3 py-2 font-medium">
+                                {instrumentDetail.symbol}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {fmtCount(instrumentDetail.totalTrades)}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {instrumentDetail.winRate.toFixed(2)}%
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {fmtPnl(instrumentDetail.totalPnlPoints)}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {fmtCount(instrumentDetail.months.length)}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right text-muted-foreground">
+                                ...
+                              </TableCell>
+                            </TableRow>
+                          ),
+                        )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </TabsContent>
+
+                {selectedPortfolioRow.details.map((instrumentDetail) => (
+                  <TabsContent
+                    key={`content-${instrumentDetail.symbol}`}
+                    value={instrumentDetail.symbol}
+                    className="-mt-1 space-y-2 rounded-2xl border border-border/75 bg-background px-3 pt-3 pb-3"
+                  >
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          Trades
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {fmtCount(instrumentDetail.totalTrades)}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          Win rate
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {instrumentDetail.winRate.toFixed(2)}%
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="text-xs uppercase text-muted-foreground">
+                          PnL total
+                        </div>
+                        <div className="mt-1 text-2xl font-semibold">
+                          {fmtPnl(instrumentDetail.totalPnlPoints)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                      <div className="mb-2 text-sm font-medium">
+                        Evolucion mensual ({instrumentDetail.symbol})
+                      </div>
+                      <ChartContainer
+                        config={instrumentMonthChartConfig}
+                        className="!aspect-auto h-[220px] min-h-[220px] w-full"
+                      >
+                        <BarChart
+                          data={instrumentDetail.months.map((month) => ({
+                            month: month.monthLabel,
+                            trades: month.totalTrades,
+                            pnl: Number(month.totalPnlPoints.toFixed(2)),
+                          }))}
+                        >
+                          <CartesianGrid vertical={false} />
+                          <XAxis
+                            dataKey="month"
+                            tickLine={false}
+                            axisLine={false}
+                            interval="preserveStartEnd"
+                            minTickGap={18}
+                            angle={-20}
+                            textAnchor="end"
+                            height={56}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            width={60}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Bar
+                            dataKey="pnl"
+                            radius={[6, 6, 0, 0]}
+                            fill="var(--color-pnl)"
+                          />
+                        </BarChart>
+                      </ChartContainer>
+                    </div>
+
+                    <div className="overflow-hidden rounded-b-2xl rounded-tr-2xl border border-border/75 bg-card">
+                      <Table className="w-full text-sm">
+                        <TableHeader>
+                          <TableRow className="border-b bg-secondary/35 hover:bg-secondary/35">
+                            <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Activity
+                            </TableHead>
+                            <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Order ID
+                            </TableHead>
+                            <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Type
+                            </TableHead>
+                            <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Time
+                            </TableHead>
+                            <TableHead className="h-10 px-3 text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Date
+                            </TableHead>
+                            <TableHead className="h-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Price
+                            </TableHead>
+                            <TableHead className="h-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              Status
+                            </TableHead>
+                            <TableHead className="h-10 w-10 px-3 text-right text-[11px] font-semibold uppercase tracking-[0.03em]">
+                              ...
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                      </Table>
+                    </div>
+
+                    <Accordion type="multiple" className="space-y-2">
+                      {instrumentDetail.months.map((monthDetail) => (
+                        <AccordionItem
+                          key={`${instrumentDetail.symbol}-${monthDetail.monthKey}`}
+                          value={`month-${instrumentDetail.symbol}-${monthDetail.monthKey}`}
+                          className="overflow-hidden rounded-xl border border-border/70 bg-background/70"
+                        >
+                          <AccordionTrigger className="px-3 py-2.5 hover:no-underline">
+                            <div className="grid w-full grid-cols-[160px_1fr_120px_120px_120px_140px_120px_40px] items-center gap-2 pr-3 text-left text-sm">
+                              <span className="font-medium">
+                                {monthDetail.monthLabel}
+                              </span>
+                              <span className="text-muted-foreground">
+                                Monthly batch
+                              </span>
+                              <span className="text-muted-foreground">
+                                Summary
+                              </span>
+                              <span className="text-muted-foreground">-</span>
+                              <span className="text-muted-foreground">-</span>
+                              <span className="text-right tabular-nums">
+                                {fmtPnl(monthDetail.totalPnlPoints)}
+                              </span>
+                              <span className="text-right">
+                                <span
+                                  className={cn(
+                                    "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                                    tradeStatusClass(
+                                      undefined,
+                                      monthDetail.totalPnlPoints,
+                                    ),
+                                  )}
+                                >
+                                  {monthDetail.winRate.toFixed(2)}%
                                 </span>
-                              </div>
-                            </AccordionTrigger>
-                            <AccordionContent className="pb-2">
-                              <div className="space-y-2">
-                                {monthDetail.trades.map((trade, idx) => (
-                                  <div key={`${trade.id}-${idx}`} className="rounded-lg border border-border/65 bg-card/80 p-2 text-xs">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <span className="font-medium">
-                                        #{idx + 1} | {trade.side.toUpperCase()} | {trade.result ?? "-"}
-                                      </span>
-                                      <span className="tabular-nums">{fmtPnl(trade.pnl_points)}</span>
-                                    </div>
-                                    <div className="mt-1 grid gap-1 text-muted-foreground md:grid-cols-3">
-                                      <div>Setup: {fmtDate(trade.setup_time)}</div>
-                                      <div>Entry: {fmtDate(trade.entry_time)} @ {fmtPrice(trade.entry)}</div>
-                                      <div>Exit: {fmtDate(trade.exit_time)} @ {fmtPrice(trade.exit)}</div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </AccordionContent>
-                          </AccordionItem>
-                        ))}
-                      </Accordion>
-                    </AccordionContent>
-                  </AccordionItem>
+                              </span>
+                              <span className="text-right text-muted-foreground">
+                                ...
+                              </span>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="border-t border-border/60 bg-card/75 px-3 py-3">
+                            <div className="space-y-2">
+                              {monthDetail.trades.map((trade, idx) => (
+                                <div
+                                  key={`${trade.id}-${idx}`}
+                                  className="grid grid-cols-[160px_1fr_120px_120px_120px_140px_120px_40px] items-center gap-2 rounded-lg border border-border/65 bg-background/85 px-3 py-2 text-xs"
+                                >
+                                  <span className="font-medium">
+                                    Transaction
+                                  </span>
+                                  <span className="truncate font-mono text-[11px] text-muted-foreground">
+                                    {trade.id}
+                                  </span>
+                                  <span>{trade.side.toUpperCase()}</span>
+                                  <span className="text-muted-foreground">
+                                    {trade.entry_time
+                                      ? new Date(
+                                          trade.entry_time,
+                                        ).toLocaleTimeString()
+                                      : "-"}
+                                  </span>
+                                  <span className="text-muted-foreground">
+                                    {trade.entry_time
+                                      ? new Date(
+                                          trade.entry_time,
+                                        ).toLocaleDateString()
+                                      : "-"}
+                                  </span>
+                                  <span className="text-right tabular-nums">
+                                    {fmtPrice(trade.entry)}
+                                  </span>
+                                  <span className="text-right">
+                                    <span
+                                      className={cn(
+                                        "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                                        tradeStatusClass(
+                                          trade.result,
+                                          trade.pnl_points,
+                                        ),
+                                      )}
+                                    >
+                                      {tradeStatusLabel(
+                                        trade.result,
+                                        trade.pnl_points,
+                                      )}
+                                    </span>
+                                  </span>
+                                  <span className="text-right text-muted-foreground">
+                                    ...
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      ))}
+                    </Accordion>
+                  </TabsContent>
                 ))}
-              </Accordion>
+              </Tabs>
             )}
           </div>
 
           <DialogFooter className="border-t border-border/70 px-6 py-4">
-            <Button type="button" variant="outline" onClick={() => setPortfolioDetailOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPortfolioDetailOpen(false)}
+            >
               Cerrar
             </Button>
           </DialogFooter>
@@ -1497,7 +2267,8 @@ export default function BacktestingPage() {
               <span className="premium-chip bg-accent/45">Chart Tools</span>
               <DialogTitle className="mt-2">Indicadores</DialogTitle>
               <DialogDescription className="mt-1">
-                Agrega SMA o EMA con su configuracion. Se aplican al grafico principal y al detalle M15.
+                Agrega SMA o EMA con su configuracion. Se aplican al grafico
+                principal y al detalle M15.
               </DialogDescription>
             </div>
           </DialogHeader>
@@ -1505,10 +2276,14 @@ export default function BacktestingPage() {
           <div className="space-y-3 px-6 py-4">
             <div className="grid gap-3 rounded-2xl border border-border/75 bg-card/85 p-3 md:grid-cols-2">
               <div className="space-y-2 rounded-xl border border-border/70 bg-background/75 p-3">
-                <div className="text-xs uppercase text-muted-foreground">Indicador</div>
+                <div className="text-xs uppercase text-muted-foreground">
+                  Indicador
+                </div>
                 <Select
                   value={indicatorKind}
-                  onValueChange={(value) => setIndicatorKind(value as "sma" | "ema")}
+                  onValueChange={(value) =>
+                    setIndicatorKind(value as "sma" | "ema")
+                  }
                 >
                   <SelectTrigger className="w-full bg-background/85">
                     <SelectValue />
@@ -1520,7 +2295,9 @@ export default function BacktestingPage() {
                 </Select>
               </div>
               <div className="space-y-2 rounded-xl border border-border/70 bg-background/75 p-3">
-                <div className="text-xs uppercase text-muted-foreground">Periodo</div>
+                <div className="text-xs uppercase text-muted-foreground">
+                  Periodo
+                </div>
                 <Input
                   type="number"
                   min={1}
@@ -1541,7 +2318,9 @@ export default function BacktestingPage() {
             </Button>
 
             <div className="space-y-2">
-              <div className="text-xs uppercase text-muted-foreground">Activos</div>
+              <div className="text-xs uppercase text-muted-foreground">
+                Activos
+              </div>
               {movingAverages.length === 0 ? (
                 <div className="rounded-xl border border-border/75 bg-secondary/35 p-3 text-sm text-muted-foreground">
                   No hay indicadores activos.
@@ -1549,8 +2328,14 @@ export default function BacktestingPage() {
               ) : (
                 <div className="space-y-2">
                   {movingAverages.map((item, index) => (
-                    <div key={`${item.kind}:${item.period}:${index}`} className="flex items-center justify-between rounded-xl border border-border/75 bg-card/85 p-2 text-sm">
-                      <span>{item.label ?? `${item.kind.toUpperCase()}(${item.period})`}</span>
+                    <div
+                      key={`${item.kind}:${item.period}:${index}`}
+                      className="flex items-center justify-between rounded-xl border border-border/75 bg-card/85 p-2 text-sm"
+                    >
+                      <span>
+                        {item.label ??
+                          `${item.kind.toUpperCase()}(${item.period})`}
+                      </span>
                       <Button
                         type="button"
                         variant="outline"
@@ -1566,7 +2351,11 @@ export default function BacktestingPage() {
           </div>
 
           <DialogFooter className="border-t border-border/70 px-6 py-4">
-            <Button type="button" variant="outline" onClick={() => setIndicatorsModalOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIndicatorsModalOpen(false)}
+            >
               Cerrar
             </Button>
           </DialogFooter>

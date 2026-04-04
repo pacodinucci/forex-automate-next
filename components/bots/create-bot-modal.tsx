@@ -350,16 +350,19 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] flex-col overflow-hidden sm:max-w-5xl">
+      <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border-border/80 bg-background/95 p-0 sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle>{isBulk ? "Create Multiple Bots" : "Create Bot"}</DialogTitle>
+          <div className="border-b border-border/70 px-6 py-5">
+            <span className="premium-chip bg-accent/45">{isBulk ? "Bulk Setup" : "Single Setup"}</span>
+            <DialogTitle className="mt-2">{isBulk ? "Create Multiple Bots" : "Create Bot"}</DialogTitle>
+          </div>
         </DialogHeader>
 
-        <div className="space-y-4 overflow-y-auto py-2 pr-1">
+        <div className="space-y-4 overflow-y-auto px-6 py-4 pr-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
-            <div className="space-y-4">
+            <div className="space-y-4 rounded-2xl border border-border/70 bg-card/85 p-4">
               <div className="space-y-2">
-                <Label htmlFor="bot-name">Name {isBulk ? "prefix" : "(optional)"}</Label>
+                <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground" htmlFor="bot-name">Name {isBulk ? "prefix" : "(optional)"}</Label>
                 <Input
                   id="bot-name"
                   value={name}
@@ -370,7 +373,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="account-id">Account ID *</Label>
+                  <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground" htmlFor="account-id">Account ID *</Label>
                   <Input
                     id="account-id"
                     value={accountId}
@@ -379,9 +382,9 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Strategy</Label>
+                  <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Strategy</Label>
                   <Select value={strategyId} onValueChange={handleStrategyChange} disabled={loadingMeta || strategies.length === 0}>
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full bg-background/90">
                       <SelectValue placeholder="Select strategy" />
                     </SelectTrigger>
                     <SelectContent>
@@ -399,7 +402,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
                 <div className="grid gap-4 sm:grid-cols-2">
                   {selectedStrategy.params.map((param) => (
                     <div key={param.key} className="space-y-2">
-                      <Label htmlFor={`param-${param.key}`}>
+                      <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground" htmlFor={`param-${param.key}`}>
                         {param.key}
                         {param.required ? " *" : ""}
                       </Label>
@@ -408,7 +411,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
                           value={strategyParams[param.key] || "false"}
                           onValueChange={(value) => updateParam(param.key, value)}
                         >
-                          <SelectTrigger id={`param-${param.key}`}>
+                          <SelectTrigger className="w-full bg-background/90" id={`param-${param.key}`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -432,7 +435,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
               {isPeakDip(strategyId) ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="sl-points">SL points (optional)</Label>
+                    <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground" htmlFor="sl-points">SL points (optional)</Label>
                     <Input
                       id="sl-points"
                       type="number"
@@ -442,7 +445,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="tp-points">TP points (optional)</Label>
+                    <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground" htmlFor="tp-points">TP points (optional)</Label>
                     <Input
                       id="tp-points"
                       type="number"
@@ -455,16 +458,16 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
               ) : null}
 
               {isBulk ? (
-                <div className="flex items-center gap-2 rounded-md border p-3">
+                <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-secondary/30 p-3">
                   <Checkbox checked={autoStart} onCheckedChange={(value) => setAutoStart(value === true)} />
                   <Label className="text-sm">Auto-start bots after create</Label>
                 </div>
               ) : null}
             </div>
 
-            <div className="space-y-2 rounded-md border p-3">
+            <div className="space-y-2 rounded-2xl border border-border/70 bg-card/85 p-3">
               <div className="flex items-center justify-between gap-2">
-                <Label>Symbols</Label>
+                <Label className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Symbols</Label>
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"
@@ -484,12 +487,12 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
                   </Button>
                 </div>
               </div>
-              <ScrollArea className="h-[360px] rounded-md border p-3">
+              <ScrollArea className="h-[360px] rounded-xl border border-border/70 bg-background/80 p-3">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1">
                   {availableSymbols.map((item) => {
                     const checked = selectedSymbols.includes(item);
                     return (
-                      <label key={item} className="flex items-center gap-2 text-sm">
+                      <label key={item} className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm transition-colors hover:bg-secondary/45">
                         <Checkbox
                           checked={checked}
                           onCheckedChange={(value) => toggleSymbol(item, value === true)}
@@ -507,12 +510,12 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
           </div>
 
           {bulkResult ? (
-            <div className="rounded-md border p-3 text-sm">
+            <div className="rounded-xl border border-border/70 bg-card/85 p-3 text-sm">
               <div className="font-medium">Bulk result</div>
               <div className="mt-1 text-muted-foreground">
                 Created {bulkResult.created_count}/{bulkResult.total}, started {bulkResult.started_count}, failed {bulkResult.failed_count}
               </div>
-              <div className="mt-3 max-h-44 overflow-auto rounded-md border">
+              <div className="mt-3 max-h-44 overflow-auto rounded-xl border border-border/70 bg-background/70">
                 {bulkResult.results.map((result, index) => (
                   <div key={`${result.symbol ?? "item"}-${index}`} className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs last:border-b-0">
                     <span className="font-medium">{result.symbol ?? `#${index + 1}`}</span>
@@ -534,7 +537,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
           ) : null}
         </div>
 
-        <DialogFooter className="shrink-0">
+        <DialogFooter className="shrink-0 border-t border-border/70 px-6 py-4">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>

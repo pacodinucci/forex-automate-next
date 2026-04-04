@@ -1,10 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Layers3 } from "lucide-react";
 import RuntimePixiChart, { type RuntimeMovingAverageConfig } from "@/components/bots/runtime-pixi-chart";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Accordion,
   AccordionContent,
@@ -32,6 +41,7 @@ import {
   simulateLegContinuationH4M15,
   type SimTrade,
 } from "@/lib/backtesting-simulator";
+import { cn } from "@/lib/utils";
 
 type StrategyKey =
   | "peak"
@@ -80,6 +90,74 @@ type BacktestRun = {
   };
 };
 
+type BacktestViewMode = "single" | "portfolio";
+
+type PortfolioGridRow = {
+  slPoints: number;
+  tpPoints: number;
+  totalTrades: number;
+  winningTrades: number;
+  totalPnlPoints: number;
+  pairsProcessed: number;
+  pairsWithTrades: number;
+  winRate: number;
+  details: PortfolioInstrumentDetail[];
+};
+
+type PortfolioGridResponse = {
+  strategy: string;
+  range: {
+    start: string | null;
+    end: string | null;
+  };
+  symbols: string[];
+  slValues: number[];
+  tpValues: number[];
+  combinations: number;
+  rows: PortfolioGridRow[];
+};
+
+type PortfolioTradeDetail = {
+  id: string;
+  side: "buy" | "sell" | "unknown";
+  setup_time?: string;
+  entry_time?: string;
+  entry?: number;
+  exit_time?: string;
+  exit?: number;
+  result?: string;
+  pnl_points?: number;
+};
+
+type PortfolioMonthDetail = {
+  monthKey: string;
+  monthLabel: string;
+  totalTrades: number;
+  winningTrades: number;
+  totalPnlPoints: number;
+  winRate: number;
+  trades: PortfolioTradeDetail[];
+};
+
+type PortfolioInstrumentDetail = {
+  symbol: string;
+  totalTrades: number;
+  winningTrades: number;
+  totalPnlPoints: number;
+  winRate: number;
+  months: PortfolioMonthDetail[];
+};
+
+type PortfolioLoadedSymbolData = {
+  symbol: string;
+  h4: BacktestCandle[];
+  m15: BacktestCandle[];
+};
+
+type InternalPortfolioRow = Omit<PortfolioGridRow, "details"> & {
+  symbolTrades: Map<string, SimTrade[]>;
+};
+
 type BacktestCandlesResponse = {
   symbol: string;
   timeframe: string;
@@ -96,6 +174,9 @@ const STRATEGY_LABELS: Record<StrategyKey, string> = {
 
 const DEFAULT_SL_POINTS = 100;
 const DEFAULT_TP_POINTS = 400;
+const PORTFOLIO_VIEW_NAME = "Barrido de Portafolio";
+const GRID_SL_VALUES = [100, 200, 250, 300, 400, 500, 600];
+const GRID_TP_VALUES = [40, 60, 80, 100, 200, 250, 300, 400, 500, 600];
 
 function toRuntimeCandles(candles: BacktestCandle[]): BotRuntimeH4Candle[] {
   return candles.map((candle) => ({
@@ -126,7 +207,42 @@ function fmtPnl(value?: number) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)} pts`;
 }
 
+function fmtCount(value: number) {
+  return Intl.NumberFormat("es-AR").format(value);
+}
+
+function comboKey(sl: number, tp: number) {
+  return `${sl}:${tp}`;
+}
+
+function tradeMainTime(trade: PortfolioTradeDetail) {
+  return trade.entry_time ?? trade.setup_time ?? trade.exit_time;
+}
+
+function monthKeyFromTrade(trade: PortfolioTradeDetail) {
+  const raw = tradeMainTime(trade);
+  if (!raw) return "unknown";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function monthLabelFromKey(monthKey: string) {
+  if (monthKey === "unknown") return "Sin fecha";
+  const [year, month] = monthKey.split("-");
+  const date = new Date(`${year}-${month}-01T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return monthKey;
+  return date.toLocaleDateString("es-AR", {
+    year: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  });
+}
+
 export default function BacktestingPage() {
+  const [viewMode, setViewMode] = useState<BacktestViewMode>("single");
   const [meta, setMeta] = useState<DatasetMeta | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
@@ -146,6 +262,16 @@ export default function BacktestingPage() {
   const [movingAverages, setMovingAverages] = useState<RuntimeMovingAverageConfig[]>([]);
 
   const [run, setRun] = useState<BacktestRun | null>(null);
+  const [portfolioLoading, setPortfolioLoading] = useState(false);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [portfolioResult, setPortfolioResult] = useState<PortfolioGridResponse | null>(null);
+  const [portfolioProgressDone, setPortfolioProgressDone] = useState(0);
+  const [portfolioProgressTotal, setPortfolioProgressTotal] = useState(0);
+  const [portfolioCurrentSymbol, setPortfolioCurrentSymbol] = useState<string | null>(null);
+  const [portfolioCurrentSl, setPortfolioCurrentSl] = useState<number | null>(null);
+  const [portfolioCurrentTp, setPortfolioCurrentTp] = useState<number | null>(null);
+  const [portfolioDetailOpen, setPortfolioDetailOpen] = useState(false);
+  const [selectedPortfolioRow, setSelectedPortfolioRow] = useState<PortfolioGridRow | null>(null);
   const [detailRunM15, setDetailRunM15] = useState<BacktestRun | null>(null);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -327,6 +453,218 @@ export default function BacktestingPage() {
       setM15FocusRangeUtc(null);
     } finally {
       setLoadingRun(false);
+    }
+  };
+
+  const runPortfolioBacktest = async () => {
+    if (!meta) return;
+    setPortfolioLoading(true);
+    setPortfolioError(null);
+    setPortfolioResult(null);
+    setSelectedPortfolioRow(null);
+    setPortfolioDetailOpen(false);
+    setPortfolioProgressDone(0);
+    setPortfolioProgressTotal(0);
+    setPortfolioCurrentSymbol(null);
+    setPortfolioCurrentSl(null);
+    setPortfolioCurrentTp(null);
+
+    try {
+      const effectiveStrategy: StrategyKey = strategy === "leg_continuation_h4_m15" ? strategy : "leg_continuation_h4_m15";
+      const symbols = [...meta.symbols]
+        .sort((a, b) => a.localeCompare(b))
+        .filter((item) => {
+          const tfs = meta.timeframesBySymbol[item] ?? [];
+        return tfs.includes("H4") && tfs.includes("M15");
+        });
+
+      if (symbols.length === 0) {
+        throw new Error("No hay pares con H4 y M15 para correr el barrido.");
+      }
+
+      const combos = GRID_SL_VALUES.flatMap((slValue) => GRID_TP_VALUES.map((tpValue) => ({ slValue, tpValue })));
+      const totalTests = symbols.length * combos.length;
+      setPortfolioProgressTotal(totalTests);
+
+      const rowsMap = new Map<string, InternalPortfolioRow>();
+      for (const { slValue, tpValue } of combos) {
+        rowsMap.set(comboKey(slValue, tpValue), {
+          slPoints: slValue,
+          tpPoints: tpValue,
+          totalTrades: 0,
+          winningTrades: 0,
+          totalPnlPoints: 0,
+          pairsProcessed: 0,
+          pairsWithTrades: 0,
+          winRate: 0,
+          symbolTrades: new Map<string, SimTrade[]>(),
+        });
+      }
+
+      let done = 0;
+      const processedSymbols: string[] = [];
+      for (const symbolItem of symbols) {
+        const paramsH4 = new URLSearchParams({ symbol: symbolItem, timeframe: "H4" });
+        const paramsM15 = new URLSearchParams({ symbol: symbolItem, timeframe: "M15" });
+        if (start) {
+          paramsH4.set("start", start);
+          paramsM15.set("start", start);
+        }
+        if (end) {
+          paramsH4.set("end", end);
+          paramsM15.set("end", end);
+        }
+
+        const [h4Response, m15Response] = await Promise.all([
+          fetch(`/api/backtesting/candles?${paramsH4.toString()}`),
+          fetch(`/api/backtesting/candles?${paramsM15.toString()}`),
+        ]);
+
+        if (!h4Response.ok || !m15Response.ok) {
+          for (let index = 0; index < combos.length; index += 1) {
+            done += 1;
+            setPortfolioProgressDone(done);
+          }
+          continue;
+        }
+
+        const h4Payload = (await h4Response.json()) as BacktestCandlesResponse;
+        const m15Payload = (await m15Response.json()) as BacktestCandlesResponse;
+        const loaded: PortfolioLoadedSymbolData = {
+          symbol: symbolItem,
+          h4: h4Payload.candles,
+          m15: m15Payload.candles,
+        };
+        processedSymbols.push(symbolItem);
+
+        for (const { slValue, tpValue } of combos) {
+          const row = rowsMap.get(comboKey(slValue, tpValue));
+          if (!row) continue;
+
+          setPortfolioCurrentSymbol(symbolItem);
+          setPortfolioCurrentSl(slValue);
+          setPortfolioCurrentTp(tpValue);
+
+          const trades = simulateLegContinuationH4M15({
+            symbol: loaded.symbol,
+            h4: loaded.h4,
+            m15: loaded.m15,
+            pivotStrength: 2,
+            slPoints: slValue,
+            tpPoints: tpValue,
+          });
+
+          const winningTrades = trades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
+          const totalPnlPoints = trades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+
+          row.totalTrades += trades.length;
+          row.winningTrades += winningTrades;
+          row.totalPnlPoints += totalPnlPoints;
+          row.pairsProcessed += 1;
+          row.symbolTrades.set(symbolItem, trades);
+          if (trades.length > 0) {
+            row.pairsWithTrades += 1;
+          }
+
+          row.winRate = row.totalTrades > 0 ? (row.winningTrades / row.totalTrades) * 100 : 0;
+          done += 1;
+          setPortfolioProgressDone(done);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+      }
+
+      const rows = [...rowsMap.values()]
+        .map((row) => {
+          const details: PortfolioInstrumentDetail[] = [...row.symbolTrades.entries()]
+            .map(([symbolName, symbolTrades]) => {
+              const monthBuckets = new Map<string, PortfolioTradeDetail[]>();
+              for (const trade of symbolTrades) {
+                const normalizedTrade: PortfolioTradeDetail = {
+                  id: trade.id,
+                  side: trade.side,
+                  setup_time: trade.setup_time,
+                  entry_time: trade.entry_time,
+                  entry: trade.entry,
+                  exit_time: trade.exit_time,
+                  exit: trade.exit,
+                  result: trade.result,
+                  pnl_points: trade.pnl_points,
+                };
+                const monthKey = monthKeyFromTrade(normalizedTrade);
+                const bucket = monthBuckets.get(monthKey) ?? [];
+                bucket.push(normalizedTrade);
+                monthBuckets.set(monthKey, bucket);
+              }
+
+              const months: PortfolioMonthDetail[] = [...monthBuckets.entries()]
+                .map(([monthKey, monthTrades]) => {
+                  const totalTrades = monthTrades.length;
+                  const winningTrades = monthTrades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
+                  const totalPnlPoints = monthTrades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+                  return {
+                    monthKey,
+                    monthLabel: monthLabelFromKey(monthKey),
+                    totalTrades,
+                    winningTrades,
+                    totalPnlPoints,
+                    winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+                    trades: monthTrades.sort((a, b) => {
+                      const at = Date.parse(tradeMainTime(a) ?? "");
+                      const bt = Date.parse(tradeMainTime(b) ?? "");
+                      if (Number.isNaN(at) && Number.isNaN(bt)) return 0;
+                      if (Number.isNaN(at)) return 1;
+                      if (Number.isNaN(bt)) return -1;
+                      return at - bt;
+                    }),
+                  };
+                })
+                .sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+
+              const totalTrades = symbolTrades.length;
+              const winningTrades = symbolTrades.filter((trade) => (trade.pnl_points ?? 0) > 0).length;
+              const totalPnlPoints = symbolTrades.reduce((acc, trade) => acc + (trade.pnl_points ?? 0), 0);
+              return {
+                symbol: symbolName,
+                totalTrades,
+                winningTrades,
+                totalPnlPoints,
+                winRate: totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0,
+                months,
+              };
+            })
+            .sort((a, b) => b.totalPnlPoints - a.totalPnlPoints);
+
+          return {
+            slPoints: row.slPoints,
+            tpPoints: row.tpPoints,
+            totalTrades: row.totalTrades,
+            winningTrades: row.winningTrades,
+            totalPnlPoints: row.totalPnlPoints,
+            pairsProcessed: row.pairsProcessed,
+            pairsWithTrades: row.pairsWithTrades,
+            winRate: row.winRate,
+            details,
+          };
+        })
+        .sort((a, b) => b.totalPnlPoints - a.totalPnlPoints);
+      setPortfolioResult({
+        strategy: effectiveStrategy,
+        range: { start: start || null, end: end || null },
+        symbols: processedSymbols,
+        slValues: GRID_SL_VALUES,
+        tpValues: GRID_TP_VALUES,
+        combinations: combos.length,
+        rows,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error ejecutando barrido de portafolio";
+      setPortfolioError(message);
+      setPortfolioResult(null);
+    } finally {
+      setPortfolioLoading(false);
+      setPortfolioCurrentSymbol(null);
+      setPortfolioCurrentSl(null);
+      setPortfolioCurrentTp(null);
     }
   };
 
@@ -514,24 +852,54 @@ export default function BacktestingPage() {
   const isLegContinuationStrategy = strategy === "leg_continuation_h4_m15";
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold">Backtesting</h1>
-        <p className="text-sm text-muted-foreground">
-          Reproduce tus estrategias visualmente con los CSV de <code>/data</code>.
-        </p>
+    <div className="space-y-5">
+      <div className="premium-panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-background/65 px-4 py-4 md:px-5">
+          <div>
+            <span className="premium-chip bg-accent/45">Simulation Lab</span>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight">Backtesting</h1>
+            <p className="text-sm text-muted-foreground">
+              Reproduce tus estrategias visualmente con los CSV de <code>/data</code>.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 min-w-[240px] justify-between border-primary/20 bg-primary/5 text-primary hover:bg-primary/10"
+            onClick={() => setViewMode((current) => (current === "single" ? "portfolio" : "single"))}
+          >
+            <span className="inline-flex items-center gap-2">
+              <Layers3 className="h-4 w-4" />
+              {viewMode === "single" ? PORTFOLIO_VIEW_NAME : "Backtesting Individual"}
+            </span>
+            {viewMode === "single" ? <ArrowRight className="h-4 w-4" /> : <ArrowLeft className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
+      <div className="relative min-w-0 overflow-hidden">
+        <div
+          className={cn(
+            "w-full min-w-0"
+          )}
+        >
+          <div
+            className={cn(
+              "min-w-0 space-y-5 pr-0 md:pr-2",
+              viewMode === "single" ? "animate-in slide-in-from-right-4 duration-300" : "hidden"
+            )}
+          >
+
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-border/70 bg-background/55">
           <CardTitle>Configuracion</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent className="space-y-4 px-4 py-4 md:px-5">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div className="space-y-2">
               <div className="text-xs uppercase text-muted-foreground">Symbol</div>
               <Select value={symbol} onValueChange={setSymbol} disabled={metaLoading || !meta}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full bg-background/85">
                   <SelectValue placeholder="Selecciona symbol" />
                 </SelectTrigger>
                 <SelectContent>
@@ -547,7 +915,7 @@ export default function BacktestingPage() {
             <div className="space-y-2">
               <div className="text-xs uppercase text-muted-foreground">Timeframe</div>
               <Select value={timeframe} onValueChange={setTimeframe} disabled={!symbol || availableTimeframes.length === 0}>
-                <SelectTrigger>
+                <SelectTrigger className="w-full bg-background/85">
                   <SelectValue placeholder="Selecciona timeframe" />
                 </SelectTrigger>
                 <SelectContent>
@@ -567,7 +935,7 @@ export default function BacktestingPage() {
                 onValueChange={(value: StrategyKey) => setStrategy(value)}
                 disabled={!symbol || availableStrategies.length === 0}
               >
-                <SelectTrigger>
+                <SelectTrigger className="w-full bg-background/85">
                   <SelectValue placeholder="Selecciona estrategia" />
                 </SelectTrigger>
                 <SelectContent>
@@ -592,22 +960,22 @@ export default function BacktestingPage() {
 
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={runBacktest} disabled={loadingRun || !symbol || !timeframe || !strategy}>
+          <div className="premium-toolbar flex flex-wrap items-center gap-2">
+            <Button className="bg-white/95 text-slate-800 hover:bg-white" onClick={runBacktest} disabled={loadingRun || !symbol || !timeframe || !strategy}>
               {loadingRun ? "Cargando..." : "Correr backtest"}
             </Button>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs text-primary-foreground/85">
               Simulacion cliente: {symbol || "-"} {timeframe || "-"} | {STRATEGY_LABELS[strategy]}
               {strategy === "leg_continuation_h4_m15" ? ` | SL ${Math.max(1, Math.floor(slPoints))} | TP ${Math.max(1, Math.floor(tpPoints))}` : ""}
             </span>
             <div className="ml-auto">
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button type="button" variant="outline">
+                  <Button type="button" variant="outline" className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/18">
                     Stops: SL {Math.max(1, Math.floor(slPoints))} | TP {Math.max(1, Math.floor(tpPoints))}
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-72 space-y-3" align="end">
+                <PopoverContent className="w-72 space-y-3 rounded-xl border-border/80 bg-popover/98" align="end">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-xs uppercase text-muted-foreground">SL points</div>
                     <Input
@@ -647,45 +1015,46 @@ export default function BacktestingPage() {
         </CardContent>
       </Card>
 
-      {error ? <div className="text-sm text-destructive">{error}</div> : null}
+      {error ? <div className="premium-panel border-destructive/35 bg-destructive/5 p-3 text-sm text-destructive">{error}</div> : null}
 
       {run ? (
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Velas</CardTitle>
+            <Card className="border-border/75 bg-card/95">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-muted-foreground">Velas</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm">{run.candles.length}</CardContent>
+              <CardContent className="text-2xl font-semibold">{run.candles.length}</CardContent>
             </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Trades</CardTitle>
+            <Card className="border-border/75 bg-card/95">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-muted-foreground">Trades</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm">{run.summary.totalTrades}</CardContent>
+              <CardContent className="text-2xl font-semibold">{run.summary.totalTrades}</CardContent>
             </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Win rate</CardTitle>
+            <Card className="border-border/75 bg-card/95">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-muted-foreground">Win rate</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm">{run.summary.winRate.toFixed(2)}%</CardContent>
+              <CardContent className="text-2xl font-semibold">{run.summary.winRate.toFixed(2)}%</CardContent>
             </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">PnL total</CardTitle>
+            <Card className="border-border/75 bg-card/95">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-muted-foreground">PnL total</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm">{fmtPnl(run.summary.totalPnlPoints)}</CardContent>
+              <CardContent className="text-2xl font-semibold">{fmtPnl(run.summary.totalPnlPoints)}</CardContent>
             </Card>
           </div>
 
-          <Card ref={chartSectionRef}>
-            <CardHeader>
+          <Card ref={chartSectionRef} className="min-w-0 overflow-hidden">
+            <CardHeader className="border-b border-border/70 bg-background/55">
               <CardTitle>Playback</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
+            <CardContent className="min-w-0 space-y-3 px-4 py-4 md:px-5">
+              <div className="premium-toolbar flex flex-wrap items-center gap-2">
                 <Button
                   variant="default"
+                  className="bg-white/95 text-slate-800 hover:bg-white"
                   onClick={() => setPlaying(true)}
                   disabled={playing || visibleCandles.length === 0 || cursor >= run.candles.length - 1}
                 >
@@ -696,6 +1065,7 @@ export default function BacktestingPage() {
                 </Button>
                 <Button
                   variant="outline"
+                  className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
                   onClick={() => {
                     setPlaying(false);
                     setCursor(0);
@@ -705,6 +1075,7 @@ export default function BacktestingPage() {
                 </Button>
                 <Button
                   variant="outline"
+                  className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
                   onClick={() => {
                     setPlaying(false);
                     setCursor((prev) => Math.min(prev + 1, run.candles.length - 1));
@@ -713,10 +1084,10 @@ export default function BacktestingPage() {
                 >
                   Step +1
                 </Button>
-                <div className="ml-2 flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="ml-2 flex items-center gap-2 text-xs text-primary-foreground/85">
                   <span>Velocidad (ms)</span>
                   <Input
-                    className="h-8 w-24"
+                    className="h-8 w-24 border-white/20 bg-white/95 text-slate-700"
                     type="number"
                     min={30}
                     max={3000}
@@ -732,13 +1103,14 @@ export default function BacktestingPage() {
                 </div>
                 <Button
                   variant="outline"
+                  className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
                   onClick={() => setIndicatorsModalOpen(true)}
                 >
                   Indicadores {movingAverages.length > 0 ? `(${movingAverages.length})` : ""}
                 </Button>
               </div>
 
-              <div className="text-xs text-muted-foreground">
+              <div className="break-words text-xs text-muted-foreground">
                 Barra {Math.min(cursor + 1, run.candles.length)}/{run.candles.length} | Candle actual: {fmtDate(currentCandle?.time_utc)}
               </div>
 
@@ -787,11 +1159,11 @@ export default function BacktestingPage() {
           </Card>
 
           {showM15DetailChart ? (
-            <Card ref={m15SectionRef}>
-              <CardHeader>
+            <Card ref={m15SectionRef} className="min-w-0 overflow-hidden">
+              <CardHeader className="border-b border-border/70 bg-background/55">
                 <CardTitle>Detalle M15 (contexto de entrada/salida)</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="min-w-0 space-y-3 px-4 py-4 md:px-5">
                 <RuntimePixiChart
                   title={`${run.symbol} detalle M15`}
                   timeframeLabel="M15"
@@ -823,16 +1195,16 @@ export default function BacktestingPage() {
             </Card>
           ) : null}
 
-          <Card>
-            <CardHeader>
+          <Card className="overflow-hidden">
+            <CardHeader className="border-b border-border/70 bg-background/55">
               <CardTitle>Trades</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="px-4 py-4 md:px-5">
               {run.trades.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No hay trades en el rango seleccionado.</p>
               ) : (
                 <>
-                  <Accordion type="single" collapsible className="rounded-md border px-3">
+                  <Accordion type="single" collapsible className="rounded-xl border border-border/75 bg-card/65 px-3">
                     <AccordionItem value="all-trades">
                       <AccordionTrigger className="py-3 hover:no-underline">
                         <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
@@ -851,10 +1223,10 @@ export default function BacktestingPage() {
                               key={trade.id}
                               type="button"
                               onClick={() => jumpToTrade(trade)}
-                              className={`w-full rounded-md border p-3 text-left text-sm transition-colors ${
+                              className={`w-full rounded-xl border border-border/75 bg-background/70 p-3 text-left text-sm transition-colors ${
                                 selectedTradeId === trade.id
-                                  ? "border-primary bg-primary/5"
-                                  : "hover:bg-muted/40"
+                                  ? "border-primary/50 bg-primary/10"
+                                  : "hover:bg-muted/50"
                               }`}
                             >
                               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -878,7 +1250,7 @@ export default function BacktestingPage() {
                     </AccordionItem>
                   </Accordion>
 
-                  <div className="mt-4 rounded-md border bg-muted/30 p-3 text-xs">
+                  <div className="mt-4 rounded-xl border border-border/75 bg-secondary/35 p-3 text-xs">
                     <div className="mb-2 font-medium text-foreground">Resumen total</div>
                     <div className="grid gap-2 md:grid-cols-4">
                       <div>Total trades: {run.trades.length}</div>
@@ -894,25 +1266,251 @@ export default function BacktestingPage() {
           </Card>
         </>
       ) : null}
+          </div>
 
-      <Dialog open={indicatorsModalOpen} onOpenChange={setIndicatorsModalOpen}>
-        <DialogContent>
+          <div
+            className={cn(
+              "min-w-0 space-y-5 pl-0 md:pl-2",
+              viewMode === "portfolio" ? "animate-in slide-in-from-left-4 duration-300" : "hidden"
+            )}
+          >
+            <Card className="overflow-hidden">
+              <CardHeader className="border-b border-border/70 bg-background/55">
+                <CardTitle>{PORTFOLIO_VIEW_NAME}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 px-4 py-4 md:px-5">
+                <p className="text-sm text-muted-foreground">
+                  Ejecuta la estrategia en todos los pares disponibles para el rango de fecha seleccionado y evalua todas las combinaciones TP/SL.
+                </p>
+
+                <div className="premium-toolbar flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    className="bg-white/95 text-slate-800 hover:bg-white"
+                    onClick={runPortfolioBacktest}
+                    disabled={portfolioLoading}
+                  >
+                    {portfolioLoading ? "Corriendo barrido..." : `Correr ${PORTFOLIO_VIEW_NAME}`}
+                  </Button>
+                  <span className="text-xs text-primary-foreground/85">
+                    Motor: {STRATEGY_LABELS["leg_continuation_h4_m15"]} | Fecha: {start || "-"} {"->"} {end || "-"}
+                  </span>
+                  <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-primary-foreground">
+                    Progreso: {fmtCount(portfolioProgressDone)}/{fmtCount(portfolioProgressTotal || GRID_SL_VALUES.length * GRID_TP_VALUES.length)}
+                  </span>
+                  {portfolioLoading ? (
+                    <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-primary-foreground">
+                      Probando: {portfolioCurrentSymbol ?? "-"} | SL {portfolioCurrentSl ?? "-"} | TP {portfolioCurrentTp ?? "-"}
+                    </span>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="ml-auto border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
+                    onClick={() => setViewMode("single")}
+                  >
+                    Volver a individual
+                  </Button>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">Combinaciones</div>
+                    <div className="mt-1 text-xl font-semibold">
+                      {portfolioResult ? fmtCount(portfolioResult.combinations) : "70"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">Pares evaluados</div>
+                    <div className="mt-1 text-xl font-semibold">
+                      {portfolioResult ? fmtCount(portfolioResult.symbols.length) : portfolioLoading ? "..." : "-"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">Grid TP</div>
+                    <div className="mt-1 text-sm">
+                      40, 60, 80, 100, 200, 250, 300, 400, 500, 600
+                    </div>
+                  </div>
+                </div>
+
+                {portfolioError ? (
+                  <div className="rounded-xl border border-destructive/35 bg-destructive/5 p-3 text-sm text-destructive">
+                    {portfolioError}
+                  </div>
+                ) : null}
+
+                {!portfolioResult && !portfolioLoading ? (
+                  <div className="rounded-xl border border-border/75 bg-secondary/35 p-4 text-sm text-muted-foreground">
+                    Corre el barrido para ver la tabla agregada por combinacion TP/SL.
+                  </div>
+                ) : null}
+
+                {portfolioResult ? (
+                  <div className="overflow-hidden rounded-2xl border border-border/75 bg-card/70">
+                    <Table className="w-full table-fixed text-xs">
+                      <TableHeader>
+                        <TableRow className="border-b bg-secondary/45 hover:bg-secondary/45">
+                          <TableHead className="h-9 px-2 text-[10px] font-semibold uppercase tracking-[0.02em]">SL</TableHead>
+                          <TableHead className="h-9 px-2 text-[10px] font-semibold uppercase tracking-[0.02em]">TP</TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Trades</TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Win rate</TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">PnL total</TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Pares c/ trade</TableHead>
+                          <TableHead className="h-9 px-2 text-right text-[10px] font-semibold uppercase tracking-[0.02em]">Pares evaluados</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {portfolioResult.rows.map((row) => (
+                          <TableRow
+                            key={`${row.slPoints}-${row.tpPoints}`}
+                            className="cursor-pointer odd:bg-card even:bg-secondary/25 hover:bg-emerald-100/35"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setSelectedPortfolioRow(row);
+                              setPortfolioDetailOpen(true);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setSelectedPortfolioRow(row);
+                                setPortfolioDetailOpen(true);
+                              }
+                            }}
+                          >
+                            <TableCell className="px-2 py-2 font-medium">{row.slPoints}</TableCell>
+                            <TableCell className="px-2 py-2 font-medium">{row.tpPoints}</TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtCount(row.totalTrades)}</TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">{row.winRate.toFixed(2)}%</TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtPnl(row.totalPnlPoints)}</TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtCount(row.pairsWithTrades)}</TableCell>
+                            <TableCell className="px-2 py-2 text-right tabular-nums">{fmtCount(row.pairsProcessed)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+
+      <Dialog open={portfolioDetailOpen} onOpenChange={setPortfolioDetailOpen}>
+        <DialogContent className="flex max-h-[88vh] flex-col overflow-hidden rounded-2xl border-border/80 bg-background/95 p-0 sm:max-w-6xl">
           <DialogHeader>
-            <DialogTitle>Indicadores</DialogTitle>
-            <DialogDescription>
-              Agrega SMA o EMA con su configuracion. Se aplican al grafico principal y al detalle M15.
-            </DialogDescription>
+            <div className="border-b border-border/70 px-6 py-5">
+              <span className="premium-chip bg-accent/45">Detalle de Combinacion</span>
+              <DialogTitle className="mt-2">
+                {selectedPortfolioRow ? `SL ${selectedPortfolioRow.slPoints} / TP ${selectedPortfolioRow.tpPoints}` : "Detalle"}
+              </DialogTitle>
+              <DialogDescription className="mt-1">
+                Organizado por instrumento y por mes. Dentro de cada mes se listan todos los trades.
+              </DialogDescription>
+            </div>
           </DialogHeader>
 
-          <div className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
+          <div className="scrollbar-none min-h-0 flex-1 overflow-y-auto px-6 py-4">
+            {!selectedPortfolioRow ? (
+              <div className="rounded-xl border border-border/75 bg-secondary/35 p-4 text-sm text-muted-foreground">
+                Selecciona una fila para abrir su detalle.
+              </div>
+            ) : selectedPortfolioRow.details.length === 0 ? (
+              <div className="rounded-xl border border-border/75 bg-secondary/35 p-4 text-sm text-muted-foreground">
+                No hay detalle disponible para esta combinacion.
+              </div>
+            ) : (
+              <Accordion type="multiple" className="space-y-2">
+                {selectedPortfolioRow.details.map((instrumentDetail) => (
+                  <AccordionItem
+                    key={`${selectedPortfolioRow.slPoints}-${selectedPortfolioRow.tpPoints}-${instrumentDetail.symbol}`}
+                    value={`instrument-${instrumentDetail.symbol}`}
+                    className="rounded-xl border border-border/75 bg-card/70 px-3"
+                  >
+                    <AccordionTrigger className="py-3 hover:no-underline">
+                      <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
+                        <span className="text-sm font-semibold">{instrumentDetail.symbol}</span>
+                        <span className="text-xs text-muted-foreground">
+                          Trades {fmtCount(instrumentDetail.totalTrades)} | Win {instrumentDetail.winRate.toFixed(2)}% | PnL {fmtPnl(instrumentDetail.totalPnlPoints)}
+                        </span>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent className="pb-3">
+                      <Accordion type="multiple" className="space-y-2">
+                        {instrumentDetail.months.map((monthDetail) => (
+                          <AccordionItem
+                            key={`${instrumentDetail.symbol}-${monthDetail.monthKey}`}
+                            value={`month-${instrumentDetail.symbol}-${monthDetail.monthKey}`}
+                            className="rounded-xl border border-border/70 bg-background/70 px-3"
+                          >
+                            <AccordionTrigger className="py-2.5 hover:no-underline">
+                              <div className="flex w-full flex-wrap items-center justify-between gap-2 pr-3 text-left">
+                                <span className="text-sm font-medium">{monthDetail.monthLabel}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  Trades {fmtCount(monthDetail.totalTrades)} | Win {monthDetail.winRate.toFixed(2)}% | PnL {fmtPnl(monthDetail.totalPnlPoints)}
+                                </span>
+                              </div>
+                            </AccordionTrigger>
+                            <AccordionContent className="pb-2">
+                              <div className="space-y-2">
+                                {monthDetail.trades.map((trade, idx) => (
+                                  <div key={`${trade.id}-${idx}`} className="rounded-lg border border-border/65 bg-card/80 p-2 text-xs">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="font-medium">
+                                        #{idx + 1} | {trade.side.toUpperCase()} | {trade.result ?? "-"}
+                                      </span>
+                                      <span className="tabular-nums">{fmtPnl(trade.pnl_points)}</span>
+                                    </div>
+                                    <div className="mt-1 grid gap-1 text-muted-foreground md:grid-cols-3">
+                                      <div>Setup: {fmtDate(trade.setup_time)}</div>
+                                      <div>Entry: {fmtDate(trade.entry_time)} @ {fmtPrice(trade.entry)}</div>
+                                      <div>Exit: {fmtDate(trade.exit_time)} @ {fmtPrice(trade.exit)}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </AccordionContent>
+                          </AccordionItem>
+                        ))}
+                      </Accordion>
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            )}
+          </div>
+
+          <DialogFooter className="border-t border-border/70 px-6 py-4">
+            <Button type="button" variant="outline" onClick={() => setPortfolioDetailOpen(false)}>
+              Cerrar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={indicatorsModalOpen} onOpenChange={setIndicatorsModalOpen}>
+        <DialogContent className="rounded-2xl border-border/80 bg-background/95 p-0 sm:max-w-2xl">
+          <DialogHeader>
+            <div className="border-b border-border/70 px-6 py-5">
+              <span className="premium-chip bg-accent/45">Chart Tools</span>
+              <DialogTitle className="mt-2">Indicadores</DialogTitle>
+              <DialogDescription className="mt-1">
+                Agrega SMA o EMA con su configuracion. Se aplican al grafico principal y al detalle M15.
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 px-6 py-4">
+            <div className="grid gap-3 rounded-2xl border border-border/75 bg-card/85 p-3 md:grid-cols-2">
+              <div className="space-y-2 rounded-xl border border-border/70 bg-background/75 p-3">
                 <div className="text-xs uppercase text-muted-foreground">Indicador</div>
                 <Select
                   value={indicatorKind}
                   onValueChange={(value) => setIndicatorKind(value as "sma" | "ema")}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full bg-background/85">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -921,7 +1519,7 @@ export default function BacktestingPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 rounded-xl border border-border/70 bg-background/75 p-3">
                 <div className="text-xs uppercase text-muted-foreground">Periodo</div>
                 <Input
                   type="number"
@@ -945,13 +1543,13 @@ export default function BacktestingPage() {
             <div className="space-y-2">
               <div className="text-xs uppercase text-muted-foreground">Activos</div>
               {movingAverages.length === 0 ? (
-                <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                <div className="rounded-xl border border-border/75 bg-secondary/35 p-3 text-sm text-muted-foreground">
                   No hay indicadores activos.
                 </div>
               ) : (
                 <div className="space-y-2">
                   {movingAverages.map((item, index) => (
-                    <div key={`${item.kind}:${item.period}:${index}`} className="flex items-center justify-between rounded-md border p-2 text-sm">
+                    <div key={`${item.kind}:${item.period}:${index}`} className="flex items-center justify-between rounded-xl border border-border/75 bg-card/85 p-2 text-sm">
                       <span>{item.label ?? `${item.kind.toUpperCase()}(${item.period})`}</span>
                       <Button
                         type="button"
@@ -967,7 +1565,7 @@ export default function BacktestingPage() {
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="border-t border-border/70 px-6 py-4">
             <Button type="button" variant="outline" onClick={() => setIndicatorsModalOpen(false)}>
               Cerrar
             </Button>

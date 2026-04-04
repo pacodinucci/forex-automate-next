@@ -146,10 +146,10 @@ function timeframeToMinutes(timeframe: string) {
 
 function stageBadgeClass(stageLabel: string) {
   const stage = stageLabel.toLowerCase();
-  if (stage.includes("entry")) return "bg-blue-700";
-  if (stage.includes("breakout")) return "bg-violet-700";
-  if (stage.includes("legs")) return "bg-teal-700";
-  return "bg-slate-600";
+  if (stage.includes("entry")) return "border-blue-400/25 bg-blue-500/15 text-blue-700";
+  if (stage.includes("breakout")) return "border-violet-400/25 bg-violet-500/15 text-violet-700";
+  if (stage.includes("legs")) return "border-teal-400/25 bg-teal-500/15 text-teal-700";
+  return "border-foreground/15 bg-foreground/10 text-foreground";
 }
 
 function parseHexColor(color: string | undefined, fallback: number) {
@@ -2003,29 +2003,29 @@ export default function RuntimePixiChart({
   }, [appReadyTick, breakLevel, candles, candidateLevels, crosshair, drawableLegs, effectiveLivePrice, height, isHistorical, liveBoundaryIso, movingAverageSeries, range, rightOffsetBars, selectedTradeHighlight, timeframeMin, tradeMarkers, width, yAutoDomain, yCenterPrice, yZoom]);
 
   return (
-    <div className="relative rounded-md border bg-slate-50 p-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="text-sm font-semibold text-slate-800">{title} ({timeframeLabel})</div>
+    <div className="relative min-w-0 max-w-full overflow-hidden rounded-2xl border border-border/75 bg-card/85 p-3 shadow-[0_10px_28px_-24px_oklch(0.25_0.02_220_/_50%)]">
+      <div className="premium-toolbar mb-3 flex items-center justify-between gap-2 border-none px-3 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="truncate text-sm font-semibold text-primary-foreground">{title} ({timeframeLabel})</div>
           <button
             type="button"
             onClick={centerChart}
-            className="inline-flex items-center rounded border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+            className="inline-flex items-center rounded-xl border border-white/25 bg-white/10 px-2 py-0.5 text-[11px] font-medium text-primary-foreground hover:bg-white/20"
           >
             Centrar
           </button>
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs font-semibold text-white ${stageBadgeClass(stageLabel)}`}>
+        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${stageBadgeClass(stageLabel)}`}>
           {stageLabel}
         </span>
       </div>
       {showLegLabels ? (
-        <div className="mb-2 text-xs text-slate-600">
+        <div className="mb-2 text-xs text-muted-foreground">
           Current leg (runtime): {typeof currentLeg === "number" && Number.isFinite(currentLeg) ? Math.max(1, Math.floor(currentLeg)) : "-"}
         </div>
       ) : null}
-      <div ref={hostRef} className="w-full rounded border border-slate-200" style={{ height }} />
-      <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+      <div ref={hostRef} className="w-full max-w-full overflow-hidden rounded-xl border border-border/75 bg-background/50" style={{ height }} />
+      <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
         <span>
           {(range ? range.end - range.start + 1 : candles.length)}/{candles.length} bars | Ctrl+wheel zoom X | drag pan X/Y | drag right scale zoom Y
         </span>
@@ -2040,7 +2040,7 @@ export default function RuntimePixiChart({
           <button
             type="button"
             onClick={() => zoomByFactor(ZOOM_IN_FACTOR)}
-            className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+            className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-background/85 px-2 py-1 text-xs text-foreground/90 hover:bg-secondary/60"
             aria-label="Zoom in"
             title="Zoom in"
           >
@@ -2050,7 +2050,7 @@ export default function RuntimePixiChart({
           <button
             type="button"
             onClick={() => zoomByFactor(ZOOM_OUT_FACTOR)}
-            className="inline-flex items-center gap-1 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+            className="inline-flex items-center gap-1 rounded-xl border border-border/80 bg-background/85 px-2 py-1 text-xs text-foreground/90 hover:bg-secondary/60"
             aria-label="Zoom out"
             title="Zoom out"
           >
@@ -2060,7 +2060,7 @@ export default function RuntimePixiChart({
           <button
             type="button"
             onClick={resetView}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+            className="rounded-xl border border-border/80 bg-background/85 px-2 py-1 text-xs text-foreground/90 hover:bg-secondary/60"
           >
             Reset view
           </button>

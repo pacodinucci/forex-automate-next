@@ -245,45 +245,48 @@ export default function BotsPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-semibold">Bots</h1>
-          <p className="text-sm text-muted-foreground">Price stream: {streamStatus}</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={handleRefreshAll}>Refresh</Button>
-          <Button variant="outline" onClick={() => openCreateModal("bulk")}>Multiple bots</Button>
-          <Button onClick={() => openCreateModal("single")}>
-            <Plus className="mr-2 h-4 w-4" />
-            New bot
-          </Button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border bg-card p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm">
-            <span className="font-medium">Runtime health:</span>{" "}
-            {runtimeReady === true ? "Ready" : runtimeReady === false ? "Not ready" : "Unknown"}
-            {hasRateLimitSignals ? (
-              <span className="ml-2 text-amber-700">(rate-limit signals detected)</span>
-            ) : null}
+    <div className="space-y-5">
+      <div className="premium-panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 bg-background/65 px-4 py-4 md:px-5">
+          <div className="space-y-1">
+            <span className="premium-chip bg-accent/45">Bot Operations</span>
+            <h1 className="text-2xl font-semibold tracking-tight">Bots</h1>
+            <p className="text-sm text-muted-foreground">Price stream: {streamStatus}</p>
           </div>
-          <div className="flex items-center gap-2">
-            {runtimeHealthCheckedAt ? (
-              <span className="text-xs text-muted-foreground">
-                Updated {runtimeHealthCheckedAt.toLocaleTimeString()}
-              </span>
-            ) : null}
-            <Button size="sm" variant="outline" onClick={loadRuntimeHealth} disabled={runtimeHealthLoading}>
-              {runtimeHealthLoading ? "Checking..." : "Check runtime"}
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={handleRefreshAll}>Refresh</Button>
+            <Button variant="outline" onClick={() => openCreateModal("bulk")}>Multiple bots</Button>
+            <Button className="shadow-sm" onClick={() => openCreateModal("single")}>
+              <Plus className="mr-2 h-4 w-4" />
+              New bot
             </Button>
           </div>
         </div>
-        {runtimeHealthError ? (
-          <div className="mt-2 text-sm text-destructive">{runtimeHealthError}</div>
-        ) : null}
+
+        <div className="px-4 py-3 md:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm">
+              <span className="font-medium">Runtime health:</span>{" "}
+              {runtimeReady === true ? "Ready" : runtimeReady === false ? "Not ready" : "Unknown"}
+              {hasRateLimitSignals ? (
+                <span className="ml-2 text-amber-700">(rate-limit signals detected)</span>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              {runtimeHealthCheckedAt ? (
+                <span className="text-xs text-muted-foreground">
+                  Updated {runtimeHealthCheckedAt.toLocaleTimeString()}
+                </span>
+              ) : null}
+              <Button size="sm" variant="outline" onClick={loadRuntimeHealth} disabled={runtimeHealthLoading}>
+                {runtimeHealthLoading ? "Checking..." : "Check runtime"}
+              </Button>
+            </div>
+          </div>
+          {runtimeHealthError ? (
+            <div className="mt-2 text-sm text-destructive">{runtimeHealthError}</div>
+          ) : null}
+        </div>
       </div>
 
       {loading ? <div>Loading bots...</div> : null}
@@ -291,7 +294,7 @@ export default function BotsPage() {
       {actionError ? <div className="text-sm text-destructive">{actionError}</div> : null}
 
       {!loading && bots.length === 0 ? (
-        <div className="rounded-lg border bg-card p-6 text-center text-muted-foreground">
+        <div className="premium-panel p-6 text-center text-muted-foreground">
           No bots yet.
           <div className="mt-3 flex items-center justify-center gap-2">
             <Button variant="outline" onClick={() => openCreateModal("bulk")}>Create multiple</Button>
@@ -301,8 +304,8 @@ export default function BotsPage() {
       ) : null}
 
       {!loading && bots.length > 0 ? (
-        <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
-          <div className="border-b px-4 py-3">
+        <div className="premium-panel overflow-hidden">
+          <div className="premium-toolbar m-3 mb-0 border-none">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="relative w-full max-w-md">
                 <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
@@ -310,7 +313,7 @@ export default function BotsPage() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search or filter..."
-                  className="h-10 rounded-full border-0 bg-muted/65 pr-4 pl-9 shadow-none focus-visible:ring-2"
+                  className="h-10 rounded-full border border-white/15 bg-white/90 pr-4 pl-9 text-slate-700 shadow-none focus-visible:ring-2"
                 />
               </div>
 
@@ -318,7 +321,7 @@ export default function BotsPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 px-2.5 text-xs"
+                  className="h-8 border-white/20 bg-white/12 px-2.5 text-xs text-primary-foreground hover:bg-white/20"
                   onClick={() => handleBulkAction("pause")}
                   disabled={bulkAction !== null || runningCount === 0}
                 >
@@ -328,7 +331,7 @@ export default function BotsPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 px-2.5 text-xs"
+                  className="h-8 border-white/20 bg-white/12 px-2.5 text-xs text-primary-foreground hover:bg-white/20"
                   onClick={() => handleBulkAction("resume")}
                   disabled={bulkAction !== null || pausedCount === 0}
                 >
@@ -338,7 +341,7 @@ export default function BotsPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-8 px-2.5 text-xs"
+                  className="h-8 border-white/20 bg-white/12 px-2.5 text-xs text-primary-foreground hover:bg-white/20"
                   onClick={() => handleBulkAction("stop")}
                   disabled={bulkAction !== null || stoppableCount === 0}
                 >
@@ -362,9 +365,9 @@ export default function BotsPage() {
           {filteredBots.length === 0 ? (
             <div className="p-6 text-sm text-muted-foreground">No bots match this filter.</div>
           ) : (
-            <Table className="min-w-[1080px] text-sm">
+            <Table className="min-w-[1080px] px-3 pb-3 text-sm">
               <TableHeader>
-                <TableRow className="border-b bg-muted/35 hover:bg-muted/35">
+                <TableRow className="border-b bg-secondary/45 hover:bg-secondary/45">
                   <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Status</TableHead>
                   <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Name</TableHead>
                   <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Symbol</TableHead>
@@ -388,8 +391,8 @@ export default function BotsPage() {
                     <TableRow
                       key={bot.id}
                       className={cn(
-                        "h-12 border-b border-border/70 bg-card hover:bg-emerald-50/35",
-                        "odd:bg-card even:bg-slate-50/40"
+                        "h-12 border-b border-border/70 bg-card hover:bg-emerald-100/35",
+                        "odd:bg-card even:bg-secondary/28"
                       )}
                     >
                       <TableCell className="px-4">

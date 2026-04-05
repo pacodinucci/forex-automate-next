@@ -120,8 +120,16 @@
     @apply bg-background text-foreground;
     min-height: 100vh;
     background-image:
-      radial-gradient(circle at 10% 0%, oklch(0.95 0.04 145), transparent 28rem),
-      radial-gradient(circle at 90% 0%, oklch(0.91 0.05 150 / 55%), transparent 24rem),
+      radial-gradient(
+        circle at 10% 0%,
+        oklch(0.95 0.04 145),
+        transparent 28rem
+      ),
+      radial-gradient(
+        circle at 90% 0%,
+        oklch(0.91 0.05 150 / 55%),
+        transparent 24rem
+      ),
       linear-gradient(180deg, oklch(0.968 0.016 145), oklch(0.955 0.012 150));
   }
 }
@@ -129,7 +137,11 @@
 @layer components {
   .app-shell-main {
     background-image:
-      radial-gradient(circle at 100% 0%, oklch(0.86 0.06 145 / 40%), transparent 22rem),
+      radial-gradient(
+        circle at 100% 0%,
+        oklch(0.86 0.06 145 / 40%),
+        transparent 22rem
+      ),
       linear-gradient(180deg, oklch(0.975 0.014 148), oklch(0.958 0.012 147));
   }
 

@@ -1813,12 +1813,12 @@ export default function BacktestingPage() {
                 onValueChange={setPortfolioDetailTab}
                 className="space-y-0"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-primary px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-muted px-3 py-2">
                   <div className="scrollbar-none w-full flex-1 overflow-x-auto overflow-y-hidden">
-                    <TabsList className="h-auto w-max min-w-max flex-nowrap justify-start gap-1 bg-transparent p-0 pr-2">
+                    <TabsList className="h-auto w-max min-w-max flex-nowrap justify-start gap-1 bg-transparent py-0.5 pr-2">
                       <TabsTrigger
                         value="summary"
-                        className="h-9 rounded-xl border border-white/12 bg-black/25 px-3 py-1.5 text-xs text-primary-foreground/90 data-[state=active]:border-background data-[state=active]:bg-background data-[state=active]:text-foreground"
+                        className="h-9 rounded-xl border border-white/12 bg-ring px-3 py-1.5 text-xs text-primary-foreground/90 data-[state=active]:border-background data-[state=active]:bg-background data-[state=active]:text-foreground"
                       >
                         Overview
                       </TabsTrigger>
@@ -1826,7 +1826,7 @@ export default function BacktestingPage() {
                         <TabsTrigger
                           key={`tab-${instrumentDetail.symbol}`}
                           value={instrumentDetail.symbol}
-                          className="h-9 rounded-xl border border-white/12 bg-black/25 px-3 py-1.5 text-xs text-primary-foreground/90 data-[state=active]:border-background data-[state=active]:bg-background data-[state=active]:text-foreground"
+                          className="h-9 rounded-xl border border-white/12 bg-ring px-3 py-1.5 text-xs text-primary-foreground/90 data-[state=active]:border-background data-[state=active]:bg-background data-[state=active]:text-foreground"
                         >
                           {instrumentDetail.symbol}
                         </TabsTrigger>
@@ -1835,13 +1835,13 @@ export default function BacktestingPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <div className="flex h-9 items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs text-primary-foreground/85">
+                    <div className="flex h-9 items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs text-primary">
                       <Search className="h-3.5 w-3.5" />
                       Search by trade or ID
                     </div>
                     <button
                       type="button"
-                      className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3 text-xs text-primary-foreground/85"
+                      className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-3 text-xs text-primary"
                     >
                       <Filter className="h-3.5 w-3.5" />
                       Filter

@@ -9,6 +9,7 @@ import {
   ChartNetwork,
   TestTubeDiagonal,
   Spotlight,
+  ClipboardList,
 } from "lucide-react";
 
 import {
@@ -49,6 +50,11 @@ const NAV_ITEMS = [
     label: "Spot Prices",
     href: "/spot",
     icon: Spotlight,
+  },
+  {
+    label: "Registro",
+    href: "/registro",
+    icon: ClipboardList,
   },
 ];
 

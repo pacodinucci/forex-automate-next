@@ -65,6 +65,30 @@ function isPeakDip(strategyId: string) {
   return strategyId.toLowerCase().includes("peak_dip") || strategyId.toLowerCase().includes("peak-dip");
 }
 
+function isPeakDipM5M1(strategyId: string) {
+  const normalized = strategyId.toLowerCase().replace(/-/g, "_");
+  return normalized === "peak_dip_m5_m1";
+}
+
+function isLegContinuationM5M1(strategyId: string) {
+  return strategyId.toLowerCase() === "leg_continuation_m5_m1";
+}
+
+function pickInitialStrategy(strategies: StrategyDefinition[]) {
+  if (strategies.length === 0) return undefined;
+
+  const byNormalizedId = new Map(
+    strategies.map((strategy) => [strategy.id.toLowerCase().replace(/-/g, "_"), strategy])
+  );
+
+  return (
+    byNormalizedId.get("peak_dip_m5_m1") ??
+    byNormalizedId.get("peak_dip") ??
+    byNormalizedId.get("leg_continuation_m5_m1") ??
+    strategies[0]
+  );
+}
+
 function toUniqueSorted(values: string[]) {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
@@ -116,7 +140,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
         const strategyList = strategyData?.strategies ?? [];
         setStrategies(strategyList);
 
-        const firstStrategy = strategyList[0];
+        const firstStrategy = pickInitialStrategy(strategyList);
         if (firstStrategy) {
           setStrategyId(firstStrategy.id);
           setStrategyParams(toInitialParams(firstStrategy));
@@ -238,7 +262,7 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
     setError(null);
     setBulkResult(null);
 
-    const firstStrategy = strategies[0];
+    const firstStrategy = pickInitialStrategy(strategies);
     setStrategyId(firstStrategy?.id ?? "");
     setStrategyParams(toInitialParams(firstStrategy));
 
@@ -486,6 +510,24 @@ export default function CreateBotModal({ open, onOpenChange, onCreated, mode = "
                     Clear
                   </Button>
                 </div>
+
+                {isLegContinuationM5M1(strategyId) ? (
+                  <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    `leg_continuation_m5_m1` necesita estructura M5 + gatillo M1, por eso puede tardar bastante en abrir.
+                    {strategies.some((item) => isPeakDipM5M1(item.id)) ? (
+                      <>
+                        {" "}
+                        Para una prueba mas rapida de ejecucion, cambia a `peak_dip_m5_m1`.
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {isPeakDipM5M1(strategyId) ? (
+                  <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                    `peak_dip_m5_m1` es mejor para validar que se ejecuten operaciones en ventanas cortas.
+                  </div>
+                ) : null}
               </div>
               <ScrollArea className="h-[360px] rounded-xl border border-border/70 bg-background/80 p-3">
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-1">

@@ -1,11 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Filter, Layers3, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Download,
+  Filter,
+  Layers3,
+  Search,
+} from "lucide-react";
 import RuntimePixiChart, {
   type RuntimeMovingAverageConfig,
 } from "@/components/bots/runtime-pixi-chart";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,11 +38,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -43,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
 import {
   ChartContainer,
   ChartTooltip,
@@ -100,7 +104,7 @@ type BacktestRun = {
   };
 };
 
-type BacktestViewMode = "single" | "portfolio";
+type BacktestViewMode = "single" | "portfolio" | "comparison";
 
 type PortfolioGridRow = {
   slPoints: number;
@@ -175,6 +179,53 @@ type BacktestCandlesResponse = {
   candles: BacktestCandle[];
 };
 
+type PortfolioCsvRow = {
+  slPoints: number;
+  tpPoints: number;
+  totalTrades: number;
+  winRate: number;
+  totalPnlPoints: number;
+  pairsWithTrades: number;
+  pairsProcessed: number;
+};
+
+type UploadedPortfolioCsv = {
+  id: string;
+  name: string;
+  rows: PortfolioCsvRow[];
+  loadedAtIso: string;
+};
+
+type ComparisonComboStats = {
+  comboKey: string;
+  slPoints: number;
+  tpPoints: number;
+  samples: number;
+  avgPnl: number;
+  stdPnl: number;
+  avgWinRate: number;
+  stdWinRate: number;
+  avgRank: number;
+  rankStd: number;
+  bestRank: number;
+  worstRank: number;
+  top3Freq: number;
+  top5Freq: number;
+  top10Freq: number;
+  positiveFreq: number;
+  neighborDeltaAvg: number;
+  robustnessScore: number;
+};
+
+type ComparisonSortKey =
+  | "robustnessScore"
+  | "avgRank"
+  | "rankStd"
+  | "top5Freq"
+  | "avgPnl"
+  | "avgWinRate"
+  | "neighborDeltaAvg";
+
 const STRATEGY_LABELS: Record<StrategyKey, string> = {
   peak: "Peak/Dip",
   break_retest: "Break + Retest",
@@ -187,6 +238,7 @@ const DEFAULT_TP_POINTS = 400;
 const PORTFOLIO_VIEW_NAME = "Barrido de Portafolio";
 const GRID_SL_VALUES = [100, 200, 250, 300, 400, 500, 600];
 const GRID_TP_VALUES = [40, 60, 80, 100, 200, 250, 300, 400, 500, 600];
+const PORTFOLIO_STRATEGY_OPTIONS: StrategyKey[] = ["leg_continuation_h4_m15"];
 
 const summaryPnlChartConfig = {
   pnl: { label: "PnL", color: "oklch(0.69 0.17 143)" },
@@ -199,6 +251,23 @@ const instrumentMonthChartConfig = {
 
 const summaryMonthlyPnlChartConfig = {
   pnl: { label: "PnL", color: "oklch(0.57 0.103 196)" },
+} satisfies ChartConfig;
+
+const summaryWinRateChartConfig = {
+  win_rate: { label: "Win rate", color: "oklch(0.62 0.16 152)" },
+} satisfies ChartConfig;
+
+const summaryMonthlyWinRateChartConfig = {
+  win_rate: { label: "Win rate", color: "oklch(0.52 0.14 177)" },
+} satisfies ChartConfig;
+
+const comparisonScoreChartConfig = {
+  score: { label: "Robustez", color: "oklch(0.63 0.17 153)" },
+  pnl: { label: "PnL", color: "oklch(0.57 0.103 196)" },
+} satisfies ChartConfig;
+
+const comparisonWinRateChartConfig = {
+  avg_win_rate: { label: "Win rate", color: "oklch(0.52 0.14 177)" },
 } satisfies ChartConfig;
 
 function toRuntimeCandles(candles: BacktestCandle[]): BotRuntimeH4Candle[] {
@@ -232,6 +301,25 @@ function fmtPnl(value?: number) {
 
 function fmtCount(value: number) {
   return Intl.NumberFormat("es-AR").format(value);
+}
+
+function parsePointsGrid(value: string, label: string) {
+  const parts = value
+    .split(/[\s,;|]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    throw new Error(`Debes ingresar al menos un valor para ${label}.`);
+  }
+
+  const normalized = parts.map((item) => Number(item));
+  if (normalized.some((item) => !Number.isFinite(item) || item <= 0)) {
+    throw new Error(`Todos los valores de ${label} deben ser numeros > 0.`);
+  }
+
+  const unique = [...new Set(normalized.map((item) => Math.max(1, Math.floor(item))))];
+  return unique.sort((a, b) => a - b);
 }
 
 function comboKey(sl: number, tp: number) {
@@ -280,11 +368,60 @@ function monthLabelFromKey(monthKey: string) {
   });
 }
 
+function csvEscape(value: string | number | null | undefined) {
+  if (value === null || value === undefined) return "";
+  const text = String(value);
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+    if (char === '"') {
+      if (insideQuotes && next === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !insideQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function stdDev(values: number[]) {
+  if (values.length <= 1) return 0;
+  const mean = values.reduce((acc, value) => acc + value, 0) / values.length;
+  const variance =
+    values.reduce((acc, value) => acc + (value - mean) ** 2, 0) /
+    (values.length - 1);
+  return Math.sqrt(variance);
+}
+
 export default function BacktestingPage() {
   const [viewMode, setViewMode] = useState<BacktestViewMode>("single");
   const [meta, setMeta] = useState<DatasetMeta | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
   const [loadingRun, setLoadingRun] = useState(false);
+  const [runProgress, setRunProgress] = useState(0);
+  const [runProgressLabel, setRunProgressLabel] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const [symbol, setSymbol] = useState("");
@@ -305,6 +442,27 @@ export default function BacktestingPage() {
   const [run, setRun] = useState<BacktestRun | null>(null);
   const [portfolioLoading, setPortfolioLoading] = useState(false);
   const [portfolioError, setPortfolioError] = useState<string | null>(null);
+  const [portfolioStrategy, setPortfolioStrategy] = useState<StrategyKey>(
+    "leg_continuation_h4_m15",
+  );
+  const [portfolioStart, setPortfolioStart] = useState("");
+  const [portfolioEnd, setPortfolioEnd] = useState("");
+  const [portfolioSlGridInput, setPortfolioSlGridInput] = useState(
+    GRID_SL_VALUES.join(", "),
+  );
+  const [portfolioTpGridInput, setPortfolioTpGridInput] = useState(
+    GRID_TP_VALUES.join(", "),
+  );
+  const [uploadedComparisonCsvs, setUploadedComparisonCsvs] = useState<
+    UploadedPortfolioCsv[]
+  >([]);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [comparisonSort, setComparisonSort] = useState<{
+    key: ComparisonSortKey;
+    direction: "asc" | "desc";
+  }>({ key: "robustnessScore", direction: "desc" });
+  const [selectedComparisonComboKeys, setSelectedComparisonComboKeys] =
+    useState<string[]>([]);
   const [portfolioResult, setPortfolioResult] =
     useState<PortfolioGridResponse | null>(null);
   const [portfolioProgressDone, setPortfolioProgressDone] = useState(0);
@@ -413,10 +571,14 @@ export default function BacktestingPage() {
     if (!symbol || !timeframe || !strategy) return;
 
     setLoadingRun(true);
+    setRunProgress(6);
+    setRunProgressLabel("Inicializando backtest...");
     setError(null);
     setPlaying(false);
 
     try {
+      setRunProgress(14);
+      setRunProgressLabel("Validando parametros...");
       if (!Number.isFinite(slPoints) || slPoints <= 0) {
         throw new Error("SL points debe ser un numero mayor a 0.");
       }
@@ -443,6 +605,8 @@ export default function BacktestingPage() {
         return (await response.json()) as BacktestCandlesResponse;
       };
 
+      setRunProgress(32);
+      setRunProgressLabel("Cargando velas principales...");
       const mainPayload = await fetchCandles(timeframe);
       const h4ForLeg = timeframe === "H4" ? mainPayload.candles : [];
 
@@ -453,6 +617,8 @@ export default function BacktestingPage() {
 
       let m15Payload: BacktestCandlesResponse | null = null;
       if (canLoadM15Detail) {
+        setRunProgress(52);
+        setRunProgressLabel("Cargando detalle M15...");
         m15Payload = await fetchCandles("M15");
         setDetailRunM15({
           symbol,
@@ -479,6 +645,8 @@ export default function BacktestingPage() {
         if (!m15Payload) {
           throw new Error("No hay data M15 para simular Leg Continuation.");
         }
+        setRunProgress(76);
+        setRunProgressLabel("Simulando operaciones...");
         simulatedTrades = simulateLegContinuationH4M15({
           symbol,
           h4: h4ForLeg,
@@ -498,6 +666,8 @@ export default function BacktestingPage() {
         0,
       );
 
+      setRunProgress(92);
+      setRunProgressLabel("Procesando resultados...");
       setRun({
         symbol,
         timeframe,
@@ -516,6 +686,8 @@ export default function BacktestingPage() {
       setSelectedTradeId(null);
       setFocusTimeUtc(null);
       setM15FocusRangeUtc(null);
+      setRunProgress(100);
+      setRunProgressLabel("Backtest completado");
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Error corriendo backtest";
@@ -523,6 +695,8 @@ export default function BacktestingPage() {
       setRun(null);
       setDetailRunM15(null);
       setM15FocusRangeUtc(null);
+      setRunProgress(100);
+      setRunProgressLabel("No se pudo completar");
     } finally {
       setLoadingRun(false);
     }
@@ -543,9 +717,11 @@ export default function BacktestingPage() {
 
     try {
       const effectiveStrategy: StrategyKey =
-        strategy === "leg_continuation_h4_m15"
-          ? strategy
+        portfolioStrategy === "leg_continuation_h4_m15"
+          ? portfolioStrategy
           : "leg_continuation_h4_m15";
+      const slGridValues = parsePointsGrid(portfolioSlGridInput, "SL grid");
+      const tpGridValues = parsePointsGrid(portfolioTpGridInput, "TP grid");
       const symbols = [...meta.symbols]
         .sort((a, b) => a.localeCompare(b))
         .filter((item) => {
@@ -557,8 +733,8 @@ export default function BacktestingPage() {
         throw new Error("No hay pares con H4 y M15 para correr el barrido.");
       }
 
-      const combos = GRID_SL_VALUES.flatMap((slValue) =>
-        GRID_TP_VALUES.map((tpValue) => ({ slValue, tpValue })),
+      const combos = slGridValues.flatMap((slValue) =>
+        tpGridValues.map((tpValue) => ({ slValue, tpValue })),
       );
       const totalTests = symbols.length * combos.length;
       setPortfolioProgressTotal(totalTests);
@@ -589,13 +765,13 @@ export default function BacktestingPage() {
           symbol: symbolItem,
           timeframe: "M15",
         });
-        if (start) {
-          paramsH4.set("start", start);
-          paramsM15.set("start", start);
+        if (portfolioStart) {
+          paramsH4.set("start", portfolioStart);
+          paramsM15.set("start", portfolioStart);
         }
-        if (end) {
-          paramsH4.set("end", end);
-          paramsM15.set("end", end);
+        if (portfolioEnd) {
+          paramsH4.set("end", portfolioEnd);
+          paramsM15.set("end", portfolioEnd);
         }
 
         const [h4Response, m15Response] = await Promise.all([
@@ -755,10 +931,10 @@ export default function BacktestingPage() {
         .sort((a, b) => b.totalPnlPoints - a.totalPnlPoints);
       setPortfolioResult({
         strategy: effectiveStrategy,
-        range: { start: start || null, end: end || null },
+        range: { start: portfolioStart || null, end: portfolioEnd || null },
         symbols: processedSymbols,
-        slValues: GRID_SL_VALUES,
-        tpValues: GRID_TP_VALUES,
+        slValues: slGridValues,
+        tpValues: tpGridValues,
         combinations: combos.length,
         rows,
       });
@@ -774,6 +950,162 @@ export default function BacktestingPage() {
       setPortfolioCurrentSymbol(null);
       setPortfolioCurrentSl(null);
       setPortfolioCurrentTp(null);
+    }
+  };
+
+  const exportPortfolioCsv = () => {
+    if (!portfolioResult || portfolioResult.rows.length === 0) return;
+
+    const headers = [
+      "sl_points",
+      "tp_points",
+      "trades",
+      "win_rate_percent",
+      "pnl_total_points",
+      "pairs_with_trades",
+      "pairs_processed",
+    ];
+
+    const lines = portfolioResult.rows.map((row) =>
+      [
+        row.slPoints,
+        row.tpPoints,
+        row.totalTrades,
+        row.winRate.toFixed(2),
+        row.totalPnlPoints.toFixed(2),
+        row.pairsWithTrades,
+        row.pairsProcessed,
+      ]
+        .map((value) => csvEscape(value))
+        .join(","),
+    );
+
+    const timestamp = new Date()
+      .toISOString()
+      .slice(0, 19)
+      .replace(/[:T]/g, "-");
+    const startLabel = portfolioResult.range.start ?? "inicio";
+    const endLabel = portfolioResult.range.end ?? "fin";
+    const filename = `portfolio-grid-${startLabel}-to-${endLabel}-${timestamp}.csv`;
+    const csvContent = [headers.join(","), ...lines].join("\n");
+    const blob = new Blob([`\uFEFF${csvContent}`], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const parsePortfolioCsvText = (rawText: string, sourceName: string) => {
+    const text = rawText.replace(/^\uFEFF/, "");
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length < 2) {
+      throw new Error(`${sourceName}: CSV sin datos.`);
+    }
+
+    const headerCells = parseCsvLine(lines[0]).map((cell) =>
+      cell.toLowerCase().trim(),
+    );
+    const col = (name: string) => headerCells.indexOf(name);
+    const slIdx = col("sl_points");
+    const tpIdx = col("tp_points");
+    const tradesIdx = col("trades");
+    const winRateIdx = col("win_rate_percent");
+    const pnlIdx = col("pnl_total_points");
+    const pairsWithTradesIdx = col("pairs_with_trades");
+    const pairsProcessedIdx = col("pairs_processed");
+
+    if (
+      [slIdx, tpIdx, tradesIdx, winRateIdx, pnlIdx, pairsWithTradesIdx, pairsProcessedIdx].some(
+        (idx) => idx < 0,
+      )
+    ) {
+      throw new Error(
+        `${sourceName}: formato invalido. Debe ser el CSV exportado desde la grilla de portafolio.`,
+      );
+    }
+
+    const rows: PortfolioCsvRow[] = [];
+    for (let index = 1; index < lines.length; index += 1) {
+      const cells = parseCsvLine(lines[index]);
+      const numAt = (idx: number) => Number(cells[idx] ?? "");
+      const row: PortfolioCsvRow = {
+        slPoints: Math.max(1, Math.floor(numAt(slIdx))),
+        tpPoints: Math.max(1, Math.floor(numAt(tpIdx))),
+        totalTrades: Math.max(0, Math.floor(numAt(tradesIdx))),
+        winRate: numAt(winRateIdx),
+        totalPnlPoints: numAt(pnlIdx),
+        pairsWithTrades: Math.max(0, Math.floor(numAt(pairsWithTradesIdx))),
+        pairsProcessed: Math.max(0, Math.floor(numAt(pairsProcessedIdx))),
+      };
+
+      if (
+        [
+          row.slPoints,
+          row.tpPoints,
+          row.totalTrades,
+          row.winRate,
+          row.totalPnlPoints,
+          row.pairsWithTrades,
+          row.pairsProcessed,
+        ].some((value) => Number.isNaN(value) || !Number.isFinite(value))
+      ) {
+        continue;
+      }
+      rows.push(row);
+    }
+
+    if (rows.length === 0) {
+      throw new Error(`${sourceName}: sin filas validas.`);
+    }
+
+    return rows;
+  };
+
+  const handleComparisonCsvUpload = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+
+    setComparisonError(null);
+
+    try {
+      const loaded = await Promise.all(
+        files.map(async (file) => {
+          const text = await file.text();
+          const rows = parsePortfolioCsvText(text, file.name);
+          return {
+            id: `${file.name}:${file.lastModified}:${Math.random().toString(36).slice(2, 8)}`,
+            name: file.name,
+            rows,
+            loadedAtIso: new Date().toISOString(),
+          } satisfies UploadedPortfolioCsv;
+        }),
+      );
+
+      setUploadedComparisonCsvs((current) => {
+        const existingByName = new Map(current.map((item) => [item.name, item]));
+        for (const item of loaded) {
+          existingByName.set(item.name, item);
+        }
+        return [...existingByName.values()].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+      });
+      event.target.value = "";
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "No se pudieron cargar los CSV.";
+      setComparisonError(message);
     }
   };
 
@@ -1026,6 +1358,284 @@ export default function BacktestingPage() {
       }));
   }, [selectedPortfolioRow]);
 
+  const portfolioMonthlyWinRateData = useMemo(() => {
+    if (!selectedPortfolioRow) {
+      return [] as { month: string; winRate: number }[];
+    }
+
+    const monthlyTotals = new Map<
+      string,
+      { label: string; totalTrades: number; wins: number }
+    >();
+
+    for (const instrument of selectedPortfolioRow.details) {
+      for (const month of instrument.months) {
+        const current = monthlyTotals.get(month.monthKey) ?? {
+          label: month.monthLabel,
+          totalTrades: 0,
+          wins: 0,
+        };
+        current.totalTrades += month.totalTrades;
+        current.wins += month.winningTrades;
+        monthlyTotals.set(month.monthKey, current);
+      }
+    }
+
+    return [...monthlyTotals.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([, value]) => ({
+        month: value.label,
+        winRate:
+          value.totalTrades > 0
+            ? Number(((value.wins / value.totalTrades) * 100).toFixed(2))
+            : 0,
+      }));
+  }, [selectedPortfolioRow]);
+
+  const portfolioExpectedCombinations = useMemo(() => {
+    try {
+      const slGridValues = parsePointsGrid(portfolioSlGridInput, "SL grid");
+      const tpGridValues = parsePointsGrid(portfolioTpGridInput, "TP grid");
+      return slGridValues.length * tpGridValues.length;
+    } catch {
+      return 0;
+    }
+  }, [portfolioSlGridInput, portfolioTpGridInput]);
+
+  const portfolioProgressPercent = useMemo(() => {
+    const total = portfolioProgressTotal || portfolioExpectedCombinations;
+    if (!total || total <= 0) return 0;
+    return Math.max(
+      0,
+      Math.min(100, Math.round((portfolioProgressDone / total) * 100)),
+    );
+  }, [
+    portfolioProgressDone,
+    portfolioProgressTotal,
+    portfolioExpectedCombinations,
+  ]);
+
+  const comparisonComboStats = useMemo(() => {
+    if (uploadedComparisonCsvs.length === 0) {
+      return [] as ComparisonComboStats[];
+    }
+
+    type Acc = {
+      slPoints: number;
+      tpPoints: number;
+      pnl: number[];
+      winRate: number[];
+      rank: number[];
+      neighborDelta: number[];
+      top3: number;
+      top5: number;
+      top10: number;
+      positive: number;
+      samples: number;
+    };
+
+    const aggregate = new Map<string, Acc>();
+
+    for (const dataset of uploadedComparisonCsvs) {
+      const sorted = [...dataset.rows].sort(
+        (a, b) => b.totalPnlPoints - a.totalPnlPoints,
+      );
+      const rankByKey = new Map<string, number>();
+      sorted.forEach((row, index) => {
+        rankByKey.set(comboKey(row.slPoints, row.tpPoints), index + 1);
+      });
+
+      const slValues = [...new Set(dataset.rows.map((row) => row.slPoints))].sort(
+        (a, b) => a - b,
+      );
+      const tpValues = [...new Set(dataset.rows.map((row) => row.tpPoints))].sort(
+        (a, b) => a - b,
+      );
+      const rowByKey = new Map(
+        dataset.rows.map((row) => [comboKey(row.slPoints, row.tpPoints), row]),
+      );
+
+      for (const row of dataset.rows) {
+        const key = comboKey(row.slPoints, row.tpPoints);
+        const rank = rankByKey.get(key) ?? dataset.rows.length;
+        const slIndex = slValues.indexOf(row.slPoints);
+        const tpIndex = tpValues.indexOf(row.tpPoints);
+        const neighborPnls: number[] = [];
+
+        for (let dSl = -1; dSl <= 1; dSl += 1) {
+          for (let dTp = -1; dTp <= 1; dTp += 1) {
+            if (dSl === 0 && dTp === 0) continue;
+            const nextSl = slValues[slIndex + dSl];
+            const nextTp = tpValues[tpIndex + dTp];
+            if (nextSl === undefined || nextTp === undefined) continue;
+            const neighbor = rowByKey.get(comboKey(nextSl, nextTp));
+            if (neighbor) neighborPnls.push(neighbor.totalPnlPoints);
+          }
+        }
+
+        const neighborMean =
+          neighborPnls.length > 0
+            ? neighborPnls.reduce((acc, value) => acc + value, 0) /
+              neighborPnls.length
+            : row.totalPnlPoints;
+        const neighborDelta = row.totalPnlPoints - neighborMean;
+
+        const current = aggregate.get(key) ?? {
+          slPoints: row.slPoints,
+          tpPoints: row.tpPoints,
+          pnl: [],
+          winRate: [],
+          rank: [],
+          neighborDelta: [],
+          top3: 0,
+          top5: 0,
+          top10: 0,
+          positive: 0,
+          samples: 0,
+        };
+
+        current.pnl.push(row.totalPnlPoints);
+        current.winRate.push(row.winRate);
+        current.rank.push(rank);
+        current.neighborDelta.push(neighborDelta);
+        current.samples += 1;
+        if (rank <= 3) current.top3 += 1;
+        if (rank <= 5) current.top5 += 1;
+        if (rank <= 10) current.top10 += 1;
+        if (row.totalPnlPoints > 0) current.positive += 1;
+        aggregate.set(key, current);
+      }
+    }
+
+    const stats = [...aggregate.entries()].map(([key, acc]) => {
+      const avgPnl = acc.pnl.reduce((sum, value) => sum + value, 0) / acc.pnl.length;
+      const avgWinRate =
+        acc.winRate.reduce((sum, value) => sum + value, 0) / acc.winRate.length;
+      const avgRank = acc.rank.reduce((sum, value) => sum + value, 0) / acc.rank.length;
+      const bestRank = Math.min(...acc.rank);
+      const worstRank = Math.max(...acc.rank);
+      const neighborDeltaAvg =
+        acc.neighborDelta.reduce((sum, value) => sum + value, 0) /
+        acc.neighborDelta.length;
+
+      const rankScore = 1 / (1 + avgRank);
+      const rankStabilityScore = 1 / (1 + stdDev(acc.rank));
+      const topScore = acc.top5 / acc.samples;
+      const positiveScore = acc.positive / acc.samples;
+      const plateauPenalty = Math.min(
+        1,
+        Math.abs(neighborDeltaAvg) / (Math.abs(avgPnl) + 50),
+      );
+      const plateauScore = 1 - plateauPenalty;
+
+      const robustnessScore =
+        100 *
+        (0.25 * rankScore +
+          0.2 * rankStabilityScore +
+          0.2 * topScore +
+          0.2 * positiveScore +
+          0.15 * plateauScore);
+
+      return {
+        comboKey: key,
+        slPoints: acc.slPoints,
+        tpPoints: acc.tpPoints,
+        samples: acc.samples,
+        avgPnl,
+        stdPnl: stdDev(acc.pnl),
+        avgWinRate,
+        stdWinRate: stdDev(acc.winRate),
+        avgRank,
+        rankStd: stdDev(acc.rank),
+        bestRank,
+        worstRank,
+        top3Freq: acc.top3 / acc.samples,
+        top5Freq: acc.top5 / acc.samples,
+        top10Freq: acc.top10 / acc.samples,
+        positiveFreq: acc.positive / acc.samples,
+        neighborDeltaAvg,
+        robustnessScore,
+      } satisfies ComparisonComboStats;
+    });
+
+    return stats.sort((a, b) => b.robustnessScore - a.robustnessScore);
+  }, [uploadedComparisonCsvs]);
+
+  const comparisonTopRobust = useMemo(
+    () => comparisonComboStats.slice(0, 20),
+    [comparisonComboStats],
+  );
+  const comparisonTableRows = useMemo(() => {
+    const rows = [...comparisonComboStats];
+    rows.sort((a, b) => {
+      const left = a[comparisonSort.key];
+      const right = b[comparisonSort.key];
+      if (left === right) return 0;
+      const base = left < right ? -1 : 1;
+      return comparisonSort.direction === "asc" ? base : -base;
+    });
+    return rows;
+  }, [comparisonComboStats, comparisonSort]);
+
+  const toggleComparisonSort = (key: ComparisonSortKey) => {
+    setComparisonSort((current) => {
+      if (current.key !== key) {
+        return { key, direction: "desc" };
+      }
+      return {
+        key,
+        direction: current.direction === "desc" ? "asc" : "desc",
+      };
+    });
+  };
+
+  useEffect(() => {
+    const availableKeys = new Set(comparisonTableRows.map((item) => item.comboKey));
+    setSelectedComparisonComboKeys((current) =>
+      current.filter((key) => availableKeys.has(key)),
+    );
+  }, [comparisonTableRows]);
+
+  const selectedComparisonKeySet = useMemo(
+    () => new Set(selectedComparisonComboKeys),
+    [selectedComparisonComboKeys],
+  );
+  const selectedVisibleComparisonCount = useMemo(
+    () =>
+      comparisonTableRows.filter((item) =>
+        selectedComparisonKeySet.has(item.comboKey),
+      ).length,
+    [comparisonTableRows, selectedComparisonKeySet],
+  );
+  const allVisibleComparisonSelected =
+    comparisonTableRows.length > 0 &&
+    selectedVisibleComparisonCount === comparisonTableRows.length;
+  const someVisibleComparisonSelected =
+    selectedVisibleComparisonCount > 0 && !allVisibleComparisonSelected;
+
+  const toggleComparisonRowSelection = (comboKeyValue: string) => {
+    setSelectedComparisonComboKeys((current) => {
+      if (current.includes(comboKeyValue)) {
+        return current.filter((item) => item !== comboKeyValue);
+      }
+      return [...current, comboKeyValue];
+    });
+  };
+
+  const toggleSelectAllVisibleComparisonRows = (checked: boolean) => {
+    setSelectedComparisonComboKeys((current) => {
+      if (!checked) {
+        const visibleKeys = new Set(comparisonTableRows.map((item) => item.comboKey));
+        return current.filter((key) => !visibleKeys.has(key));
+      }
+      const next = new Set(current);
+      for (const row of comparisonTableRows) {
+        next.add(row.comboKey);
+      }
+      return [...next];
+    });
+  };
+
   return (
     <div className="space-y-5">
       <div className="premium-panel overflow-hidden">
@@ -1046,7 +1656,11 @@ export default function BacktestingPage() {
             className="h-11 min-w-[240px] justify-between border-primary/20 bg-primary/5 text-primary hover:bg-primary/10"
             onClick={() =>
               setViewMode((current) =>
-                current === "single" ? "portfolio" : "single",
+                current === "single"
+                  ? "portfolio"
+                  : current === "portfolio"
+                    ? "single"
+                    : "portfolio",
               )
             }
           >
@@ -1054,7 +1668,9 @@ export default function BacktestingPage() {
               <Layers3 className="h-4 w-4" />
               {viewMode === "single"
                 ? PORTFOLIO_VIEW_NAME
-                : "Backtesting Individual"}
+                : viewMode === "portfolio"
+                  ? "Backtesting Individual"
+                  : PORTFOLIO_VIEW_NAME}
             </span>
             {viewMode === "single" ? (
               <ArrowRight className="h-4 w-4" />
@@ -1170,82 +1786,76 @@ export default function BacktestingPage() {
                   </div>
                 </div>
 
-                <div className="premium-toolbar flex flex-wrap items-center gap-2">
-                  <Button
-                    className="bg-white/95 text-slate-800 hover:bg-white"
-                    onClick={runBacktest}
-                    disabled={loadingRun || !symbol || !timeframe || !strategy}
-                  >
-                    {loadingRun ? "Cargando..." : "Correr backtest"}
-                  </Button>
-                  <span className="text-xs text-primary-foreground/85">
-                    Simulacion cliente: {symbol || "-"} {timeframe || "-"} |{" "}
-                    {STRATEGY_LABELS[strategy]}
-                    {strategy === "leg_continuation_h4_m15"
-                      ? ` | SL ${Math.max(1, Math.floor(slPoints))} | TP ${Math.max(1, Math.floor(tpPoints))}`
-                      : ""}
-                  </span>
-                  <div className="ml-auto">
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/18"
-                        >
-                          Stops: SL {Math.max(1, Math.floor(slPoints))} | TP{" "}
-                          {Math.max(1, Math.floor(tpPoints))}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent
-                        className="w-72 space-y-3 rounded-xl border-border/80 bg-popover/98"
-                        align="end"
+                <div className="relative">
+                  <div className="premium-toolbar flex flex-wrap items-end justify-between gap-3">
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase text-primary-foreground/75">
+                          SL points
+                        </div>
+                        <Input
+                          className="h-10 w-32 border-white/25 bg-white/95 text-slate-700"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={slPoints}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (!Number.isNaN(next) && Number.isFinite(next)) {
+                              setSlPoints(next);
+                            }
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase text-primary-foreground/75">
+                          TP points
+                        </div>
+                        <Input
+                          className="h-10 w-32 border-white/25 bg-white/95 text-slate-700"
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={tpPoints}
+                          onChange={(event) => {
+                            const next = Number(event.target.value);
+                            if (!Number.isNaN(next) && Number.isFinite(next)) {
+                              setTpPoints(next);
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        className="bg-white/95 text-slate-800 hover:bg-white"
+                        onClick={runBacktest}
+                        disabled={loadingRun || !symbol || !timeframe || !strategy}
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs uppercase text-muted-foreground">
-                            SL points
-                          </div>
-                          <Input
-                            className="h-9 w-28"
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={slPoints}
-                            onChange={(event) => {
-                              const next = Number(event.target.value);
-                              if (
-                                !Number.isNaN(next) &&
-                                Number.isFinite(next)
-                              ) {
-                                setSlPoints(next);
-                              }
-                            }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs uppercase text-muted-foreground">
-                            TP points
-                          </div>
-                          <Input
-                            className="h-9 w-28"
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={tpPoints}
-                            onChange={(event) => {
-                              const next = Number(event.target.value);
-                              if (
-                                !Number.isNaN(next) &&
-                                Number.isFinite(next)
-                              ) {
-                                setTpPoints(next);
-                              }
-                            }}
-                          />
-                        </div>
-                      </PopoverContent>
-                    </Popover>
+                        {loadingRun ? "Corriendo..." : "Correr backtest"}
+                      </Button>
+                      {loadingRun ? (
+                        <span className="text-xs text-primary-foreground/85">
+                          Simulacion cliente: {symbol || "-"} {timeframe || "-"}{" "}
+                          | {STRATEGY_LABELS[strategy]}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
+                  {loadingRun ? (
+                    <div className="pointer-events-none absolute top-full right-0 left-0 z-20 mt-2">
+                      <div className="rounded-xl border border-border/70 bg-background/95 p-3 shadow-sm backdrop-blur">
+                        <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{runProgressLabel}</span>
+                          <span>{Math.max(0, Math.min(100, Math.floor(runProgress)))}%</span>
+                        </div>
+                        <Progress
+                          value={Math.max(0, Math.min(100, runProgress))}
+                          className="h-2 bg-secondary/80"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>
@@ -1614,6 +2224,84 @@ export default function BacktestingPage() {
                   TP/SL.
                 </p>
 
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Estrategia
+                    </div>
+                    <Select
+                      value={portfolioStrategy}
+                      onValueChange={(value: StrategyKey) =>
+                        setPortfolioStrategy(value)
+                      }
+                      disabled={portfolioLoading}
+                    >
+                      <SelectTrigger className="w-full bg-background/85">
+                        <SelectValue placeholder="Selecciona estrategia" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PORTFOLIO_STRATEGY_OPTIONS.map((item) => (
+                          <SelectItem key={item} value={item}>
+                            {STRATEGY_LABELS[item]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Start (opcional)
+                    </div>
+                    <Input
+                      value={portfolioStart}
+                      onChange={(event) => setPortfolioStart(event.target.value)}
+                      placeholder="2025-03-01"
+                      disabled={portfolioLoading}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      End (opcional)
+                    </div>
+                    <Input
+                      value={portfolioEnd}
+                      onChange={(event) => setPortfolioEnd(event.target.value)}
+                      placeholder="2025-03-31"
+                      disabled={portfolioLoading}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Grid SL (csv)
+                    </div>
+                    <Input
+                      value={portfolioSlGridInput}
+                      onChange={(event) =>
+                        setPortfolioSlGridInput(event.target.value)
+                      }
+                      placeholder="100, 200, 250, 300"
+                      disabled={portfolioLoading}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Grid TP (csv)
+                    </div>
+                    <Input
+                      value={portfolioTpGridInput}
+                      onChange={(event) =>
+                        setPortfolioTpGridInput(event.target.value)
+                      }
+                      placeholder="40, 60, 80, 100"
+                      disabled={portfolioLoading}
+                    />
+                  </div>
+                </div>
+
                 <div className="premium-toolbar flex flex-wrap items-center gap-2">
                   <Button
                     type="button"
@@ -1626,14 +2314,14 @@ export default function BacktestingPage() {
                       : `Correr ${PORTFOLIO_VIEW_NAME}`}
                   </Button>
                   <span className="text-xs text-primary-foreground/85">
-                    Motor: {STRATEGY_LABELS["leg_continuation_h4_m15"]} | Fecha:{" "}
-                    {start || "-"} {"->"} {end || "-"}
+                    Motor: {STRATEGY_LABELS[portfolioStrategy]} | Fecha:{" "}
+                    {portfolioStart || "-"} {"->"} {portfolioEnd || "-"}
                   </span>
                   <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-primary-foreground">
                     Progreso: {fmtCount(portfolioProgressDone)}/
                     {fmtCount(
                       portfolioProgressTotal ||
-                        GRID_SL_VALUES.length * GRID_TP_VALUES.length,
+                        portfolioExpectedCombinations,
                     )}
                   </span>
                   {portfolioLoading ? (
@@ -1643,17 +2331,46 @@ export default function BacktestingPage() {
                       {portfolioCurrentTp ?? "-"}
                     </span>
                   ) : null}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="ml-auto border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
-                    onClick={() => setViewMode("single")}
-                  >
-                    Volver a individual
-                  </Button>
+                  <div className="ml-auto flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
+                      onClick={exportPortfolioCsv}
+                      disabled={
+                        portfolioLoading ||
+                        !portfolioResult ||
+                        portfolioResult.rows.length === 0
+                      }
+                    >
+                      <Download className="mr-1.5 h-4 w-4" />
+                      Descargar CSV
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-white/25 bg-white/10 text-primary-foreground hover:bg-white/20"
+                      onClick={() => setViewMode("comparison")}
+                    >
+                      Comparar CSVs
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-3">
+                {portfolioLoading ? (
+                  <div className="rounded-xl border border-border/70 bg-background/90 p-3">
+                    <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Progreso del barrido</span>
+                      <span>{portfolioProgressPercent}%</span>
+                    </div>
+                    <Progress
+                      value={portfolioProgressPercent}
+                      className="h-2 bg-secondary/80"
+                    />
+                  </div>
+                ) : null}
+
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-xl border border-border/75 bg-card/85 p-3">
                     <div className="text-xs uppercase text-muted-foreground">
                       Combinaciones
@@ -1661,7 +2378,9 @@ export default function BacktestingPage() {
                     <div className="mt-1 text-xl font-semibold">
                       {portfolioResult
                         ? fmtCount(portfolioResult.combinations)
-                        : "70"}
+                        : portfolioExpectedCombinations > 0
+                          ? fmtCount(portfolioExpectedCombinations)
+                          : "-"}
                     </div>
                   </div>
                   <div className="rounded-xl border border-border/75 bg-card/85 p-3">
@@ -1678,10 +2397,22 @@ export default function BacktestingPage() {
                   </div>
                   <div className="rounded-xl border border-border/75 bg-card/85 p-3">
                     <div className="text-xs uppercase text-muted-foreground">
+                      Grid SL
+                    </div>
+                    <div className="mt-1 text-sm">
+                      {portfolioResult
+                        ? portfolioResult.slValues.join(", ")
+                        : portfolioSlGridInput || "-"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">
                       Grid TP
                     </div>
                     <div className="mt-1 text-sm">
-                      40, 60, 80, 100, 200, 250, 300, 400, 500, 600
+                      {portfolioResult
+                        ? portfolioResult.tpValues.join(", ")
+                        : portfolioTpGridInput || "-"}
                     </div>
                   </div>
                 </div>
@@ -1773,6 +2504,430 @@ export default function BacktestingPage() {
                     </Table>
                   </div>
                 ) : null}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div
+            className={cn(
+              "min-w-0 space-y-5 pl-0 md:pl-2",
+              viewMode === "comparison"
+                ? "animate-in slide-in-from-left-4 duration-300"
+                : "hidden",
+            )}
+          >
+            <Card className="overflow-hidden">
+              <CardHeader className="border-b border-border/70 bg-background/55">
+                <CardTitle>Comparador de Resultados CSV</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4 px-4 py-4 md:px-5">
+                <p className="text-sm text-muted-foreground">
+                  Sube multiples CSV exportados del barrido para comparar
+                  robustez, estabilidad de ranking y consistencia de
+                  combinaciones TP/SL entre distintos periodos.
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="file"
+                    accept=".csv,text/csv"
+                    multiple
+                    onChange={handleComparisonCsvUpload}
+                    className="max-w-[440px] bg-background/90"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setUploadedComparisonCsvs([])}
+                    disabled={uploadedComparisonCsvs.length === 0}
+                  >
+                    Limpiar
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setViewMode("portfolio")}
+                  >
+                    Volver al barrido
+                  </Button>
+                </div>
+
+                {comparisonError ? (
+                  <div className="rounded-xl border border-destructive/35 bg-destructive/5 p-3 text-sm text-destructive">
+                    {comparisonError}
+                  </div>
+                ) : null}
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      CSV cargados
+                    </div>
+                    <div className="mt-1 text-2xl font-semibold">
+                      {fmtCount(uploadedComparisonCsvs.length)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Combinaciones comparables
+                    </div>
+                    <div className="mt-1 text-2xl font-semibold">
+                      {fmtCount(comparisonComboStats.length)}
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                    <div className="text-xs uppercase text-muted-foreground">
+                      Muestras analizadas
+                    </div>
+                    <div className="mt-1 text-2xl font-semibold">
+                      {fmtCount(
+                        comparisonComboStats.reduce(
+                          (acc, item) => acc + item.samples,
+                          0,
+                        ),
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {uploadedComparisonCsvs.length > 0 ? (
+                  <div className="overflow-hidden rounded-2xl border border-border/75 bg-card/70">
+                    <Table className="w-full text-xs">
+                      <TableHeader>
+                        <TableRow className="border-b bg-secondary/35 hover:bg-secondary/35">
+                          <TableHead className="h-9 px-3">CSV</TableHead>
+                          <TableHead className="h-9 px-3 text-right">
+                            Filas
+                          </TableHead>
+                          <TableHead className="h-9 px-3 text-right">
+                            Mejor PnL
+                          </TableHead>
+                          <TableHead className="h-9 px-3 text-right">
+                            Mejor Win rate
+                          </TableHead>
+                          <TableHead className="h-9 px-3 text-right">
+                            Cargado
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {uploadedComparisonCsvs.map((item) => {
+                          const bestPnl = [...item.rows].sort(
+                            (a, b) => b.totalPnlPoints - a.totalPnlPoints,
+                          )[0];
+                          const bestWin = [...item.rows].sort(
+                            (a, b) => b.winRate - a.winRate,
+                          )[0];
+                          return (
+                            <TableRow key={item.id}>
+                              <TableCell className="px-3 py-2 font-medium">
+                                {item.name}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {fmtCount(item.rows.length)}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {bestPnl
+                                  ? `SL ${bestPnl.slPoints} / TP ${bestPnl.tpPoints} (${fmtPnl(bestPnl.totalPnlPoints)})`
+                                  : "-"}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right tabular-nums">
+                                {bestWin
+                                  ? `SL ${bestWin.slPoints} / TP ${bestWin.tpPoints} (${bestWin.winRate.toFixed(2)}%)`
+                                  : "-"}
+                              </TableCell>
+                              <TableCell className="px-3 py-2 text-right">
+                                {fmtDate(item.loadedAtIso)}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : null}
+
+                {comparisonTopRobust.length > 0 ? (
+                  <>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="mb-2 text-sm font-medium">
+                          Score de robustez (top 12)
+                        </div>
+                        <ChartContainer
+                          config={comparisonScoreChartConfig}
+                          className="!aspect-auto h-[240px] min-h-[240px] w-full"
+                        >
+                          <BarChart
+                            data={comparisonTopRobust.slice(0, 12).map((item) => ({
+                              combo: `SL ${item.slPoints} / TP ${item.tpPoints}`,
+                              score: Number(item.robustnessScore.toFixed(2)),
+                            }))}
+                          >
+                            <CartesianGrid vertical={false} />
+                            <XAxis
+                              dataKey="combo"
+                              tickLine={false}
+                              axisLine={false}
+                              interval="preserveStartEnd"
+                              minTickGap={16}
+                              angle={-24}
+                              textAnchor="end"
+                              height={64}
+                              tick={{ fontSize: 10 }}
+                            />
+                            <YAxis
+                              tickLine={false}
+                              axisLine={false}
+                              width={60}
+                              domain={[0, 100]}
+                              tick={{ fontSize: 10 }}
+                            />
+                            <ChartTooltip content={<ChartTooltipContent />} />
+                            <Bar
+                              dataKey="score"
+                              radius={[6, 6, 0, 0]}
+                              fill="var(--color-score)"
+                            />
+                          </BarChart>
+                        </ChartContainer>
+                      </div>
+
+                      <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                        <div className="mb-2 text-sm font-medium">
+                          Win rate promedio (top 12 robustez)
+                        </div>
+                        <ChartContainer
+                          config={comparisonWinRateChartConfig}
+                          className="!aspect-auto h-[240px] min-h-[240px] w-full"
+                        >
+                          <BarChart
+                            data={comparisonTopRobust.slice(0, 12).map((item) => ({
+                              combo: `SL ${item.slPoints} / TP ${item.tpPoints}`,
+                              avgWinRate: Number(item.avgWinRate.toFixed(2)),
+                            }))}
+                          >
+                            <CartesianGrid vertical={false} />
+                            <XAxis
+                              dataKey="combo"
+                              tickLine={false}
+                              axisLine={false}
+                              interval="preserveStartEnd"
+                              minTickGap={16}
+                              angle={-24}
+                              textAnchor="end"
+                              height={64}
+                              tick={{ fontSize: 10 }}
+                            />
+                            <YAxis
+                              tickLine={false}
+                              axisLine={false}
+                              width={60}
+                              domain={[0, 100]}
+                              tickFormatter={(value) => `${value}%`}
+                              tick={{ fontSize: 10 }}
+                            />
+                            <ChartTooltip content={<ChartTooltipContent />} />
+                            <Bar
+                              dataKey="avgWinRate"
+                              radius={[6, 6, 0, 0]}
+                              fill="var(--color-avg_win_rate)"
+                            />
+                          </BarChart>
+                        </ChartContainer>
+                      </div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-2xl border border-border/75 bg-card/70">
+                      <Table className="w-full table-fixed text-xs">
+                        <TableHeader>
+                          <TableRow className="border-b bg-secondary/45 hover:bg-secondary/45">
+                            <TableHead className="h-9 w-10 px-2">
+                              <Checkbox
+                                checked={
+                                  allVisibleComparisonSelected
+                                    ? true
+                                    : someVisibleComparisonSelected
+                                      ? "indeterminate"
+                                      : false
+                                }
+                                onCheckedChange={(checked) =>
+                                  toggleSelectAllVisibleComparisonRows(
+                                    checked === true,
+                                  )
+                                }
+                                aria-label="Seleccionar todas las filas visibles"
+                              />
+                            </TableHead>
+                            <TableHead className="h-9 px-2">SL</TableHead>
+                            <TableHead className="h-9 px-2">TP</TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() =>
+                                  toggleComparisonSort("robustnessScore")
+                                }
+                              >
+                                Score
+                                {comparisonSort.key === "robustnessScore"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() => toggleComparisonSort("avgRank")}
+                              >
+                                Avg Rank
+                                {comparisonSort.key === "avgRank"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() => toggleComparisonSort("rankStd")}
+                              >
+                                Rank Std
+                                {comparisonSort.key === "rankStd"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() => toggleComparisonSort("top5Freq")}
+                              >
+                                Top 5
+                                {comparisonSort.key === "top5Freq"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() => toggleComparisonSort("avgPnl")}
+                              >
+                                Avg PnL
+                                {comparisonSort.key === "avgPnl"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() =>
+                                  toggleComparisonSort("avgWinRate")
+                                }
+                              >
+                                Avg Win
+                                {comparisonSort.key === "avgWinRate"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                            <TableHead className="h-9 px-2 text-right">
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 font-semibold"
+                                onClick={() =>
+                                  toggleComparisonSort("neighborDeltaAvg")
+                                }
+                              >
+                                Robustez local
+                                {comparisonSort.key === "neighborDeltaAvg"
+                                  ? comparisonSort.direction === "desc"
+                                    ? "▼"
+                                    : "▲"
+                                  : "↕"}
+                              </button>
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {comparisonTableRows.map((item) => (
+                            <TableRow
+                              key={`compare-${item.comboKey}`}
+                              className="odd:bg-card even:bg-secondary/20"
+                            >
+                              <TableCell className="px-2 py-2">
+                                <Checkbox
+                                  checked={selectedComparisonKeySet.has(item.comboKey)}
+                                  onCheckedChange={(checked) => {
+                                    const shouldSelect = checked === true;
+                                    const isSelected =
+                                      selectedComparisonKeySet.has(item.comboKey);
+                                    if (shouldSelect === isSelected) return;
+                                    toggleComparisonRowSelection(item.comboKey);
+                                  }}
+                                  aria-label={`Seleccionar combinación SL ${item.slPoints} TP ${item.tpPoints}`}
+                                />
+                              </TableCell>
+                              <TableCell className="px-2 py-2 font-medium">
+                                {item.slPoints}
+                              </TableCell>
+                              <TableCell className="px-2 py-2 font-medium">
+                                {item.tpPoints}
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {item.robustnessScore.toFixed(2)}
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {item.avgRank.toFixed(2)}
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {item.rankStd.toFixed(2)}
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {(item.top5Freq * 100).toFixed(1)}%
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {fmtPnl(item.avgPnl)}
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {item.avgWinRate.toFixed(2)}%
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right tabular-nums">
+                                {item.neighborDeltaAvg.toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Seleccionadas: {fmtCount(selectedComparisonComboKeys.length)}
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-border/75 bg-secondary/35 p-4 text-sm text-muted-foreground">
+                    Carga dos o mas CSV para generar la comparacion estadistica
+                    entre combinaciones.
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -1966,6 +3121,91 @@ export default function BacktestingPage() {
                             dataKey="pnl"
                             radius={[6, 6, 0, 0]}
                             fill="var(--color-pnl)"
+                          />
+                        </BarChart>
+                      </ChartContainer>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                      <div className="mb-2 text-sm font-medium">
+                        Win rate por instrumento
+                      </div>
+                      <ChartContainer
+                        config={summaryWinRateChartConfig}
+                        className="!aspect-auto h-[220px] min-h-[220px] w-full"
+                      >
+                        <BarChart
+                          data={(selectedPortfolioRow?.details ?? []).map(
+                            (item) => ({
+                              symbol: item.symbol,
+                              winRate: Number(item.winRate.toFixed(2)),
+                            }),
+                          )}
+                        >
+                          <CartesianGrid vertical={false} />
+                          <XAxis
+                            dataKey="symbol"
+                            tickLine={false}
+                            axisLine={false}
+                            interval="preserveStartEnd"
+                            minTickGap={14}
+                            angle={-18}
+                            textAnchor="end"
+                            height={56}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            width={70}
+                            domain={[0, 100]}
+                            tickFormatter={(value) => `${value}%`}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Bar
+                            dataKey="winRate"
+                            radius={[6, 6, 0, 0]}
+                            fill="var(--color-win_rate)"
+                          />
+                        </BarChart>
+                      </ChartContainer>
+                    </div>
+                    <div className="rounded-xl border border-border/75 bg-card/85 p-3">
+                      <div className="mb-2 text-sm font-medium">
+                        Win rate por mes
+                      </div>
+                      <ChartContainer
+                        config={summaryMonthlyWinRateChartConfig}
+                        className="!aspect-auto h-[220px] min-h-[220px] w-full"
+                      >
+                        <BarChart data={portfolioMonthlyWinRateData}>
+                          <CartesianGrid vertical={false} />
+                          <XAxis
+                            dataKey="month"
+                            tickLine={false}
+                            axisLine={false}
+                            interval="preserveStartEnd"
+                            minTickGap={18}
+                            angle={-20}
+                            textAnchor="end"
+                            height={56}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <YAxis
+                            tickLine={false}
+                            axisLine={false}
+                            width={70}
+                            domain={[0, 100]}
+                            tickFormatter={(value) => `${value}%`}
+                            tick={{ fontSize: 10 }}
+                          />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Bar
+                            dataKey="winRate"
+                            radius={[6, 6, 0, 0]}
+                            fill="var(--color-win_rate)"
                           />
                         </BarChart>
                       </ChartContainer>

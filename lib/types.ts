@@ -160,6 +160,41 @@ export type BotLogsResponse = {
   logs: BotLog[];
 };
 
+export type TradeStatus = "OPEN" | "CLOSED";
+export type TradeRegistryStatusFilter = "ALL" | TradeStatus;
+export type TradeSource = "bot" | "manual" | string;
+
+export type TradeRegistryItem = {
+  id: string;
+  positionId: string;
+  botId: string | null;
+  source: TradeSource;
+  strategy: string | null;
+  symbol: string;
+  side: "buy" | "sell" | string;
+  volume: number;
+  openPrice: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  openedAt: string;
+  closedAt: string | null;
+  status: TradeStatus;
+  closeReason: string | null;
+  closePrice: number | null;
+  pnl: number | null;
+  metadata: Record<string, unknown>;
+};
+
+export type TradeRegistryResponse = {
+  count: number;
+  filters: {
+    limit: number;
+    status: TradeRegistryStatusFilter;
+    symbol?: string | null;
+  };
+  trades: TradeRegistryItem[];
+};
+
 export type DryRunPayload = {
   side: "buy" | "sell";
   entry?: number;

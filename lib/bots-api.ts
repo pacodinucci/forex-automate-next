@@ -18,6 +18,8 @@ import type {
   MarketPricesResponse,
   MarketRuntimeHealthResponse,
   StrategiesResponse,
+  TradeRegistryResponse,
+  TradeRegistryStatusFilter,
   UpdateBotPayload,
 } from "@/lib/types";
 
@@ -141,6 +143,38 @@ export async function runBotsAction(
 
 export async function getBotLogs(botId: string, limit = 100) {
   return appApi<BotLogsResponse>(`/bots/${botId}/logs?limit=${limit}`);
+}
+
+type RegistroFilters = {
+  limit?: number;
+  status?: TradeRegistryStatusFilter;
+  symbol?: string;
+};
+
+function toRegistroQuery(filters: RegistroFilters = {}) {
+  const params = new URLSearchParams();
+  if (typeof filters.limit === "number") {
+    params.set("limit", String(filters.limit));
+  }
+  if (filters.status) {
+    params.set("status", filters.status);
+  }
+  const symbol = filters.symbol?.trim();
+  if (symbol) {
+    params.set("symbol", symbol.toUpperCase());
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
+export async function getRegistro(filters: RegistroFilters = {}) {
+  return appApi<TradeRegistryResponse>(`/registro${toRegistroQuery(filters)}`);
+}
+
+export async function getBotRegistro(botId: string, filters: Omit<RegistroFilters, "symbol"> = {}) {
+  return appApi<TradeRegistryResponse>(
+    `/bots/${encodeURIComponent(botId)}/registro${toRegistroQuery(filters)}`
+  );
 }
 
 export async function runBotDryRun(botId: string, payload?: DryRunPayload) {

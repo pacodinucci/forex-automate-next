@@ -20,7 +20,7 @@ type Props = {
   pivotStrength?: number;
   overlayStructureFromTimeframe?: string;
   overlayStructureCandlesFallback?: BotRuntimeH4Candle[];
-  tradeMarkers?: TradeMarker[];
+  tradeMarkers?: RuntimeTradeMarker[];
   selectedTradeHighlight?: SelectedTradeHighlight | null;
   onDeselectSelectedTrade?: () => void;
   onLegBoxClick?: (leg: LegClickPayload) => void;
@@ -79,14 +79,15 @@ type DrawableLeg = VisibleLeg & {
   drawEndIdx: number;
 };
 
-type TradeMarker = {
+export type RuntimeTradeMarker = {
   id: string;
   time_utc: string;
-  price: number;
+  price?: number;
   entry_price?: number;
   entry_time_utc?: string;
   side?: "buy" | "sell" | "unknown";
-  kind?: "entry" | "exit";
+  kind?: "entry" | "exit" | "break" | "trigger" | string;
+  label?: string;
   result?: string;
   pnl_points?: number;
 };
@@ -127,11 +128,6 @@ type RuntimeMovingAverageSeries = {
   label: string;
   values: Array<number | null>;
 };
-
-function offsetLegStart(startIdx: number, endIdx: number) {
-  if (startIdx < endIdx) return startIdx + 1;
-  return startIdx;
-}
 
 function timeframeToMinutes(timeframe: string) {
   const tf = timeframe.trim().toUpperCase();
@@ -474,11 +470,9 @@ function mapLegsToTarget(
     const lastTargetIdx = targetCandles.length - 1;
     const drawStartIdx = Math.max(0, Math.min(startPos, lastTargetIdx));
     const drawEndIdx = Math.max(drawStartIdx, Math.min(endPos, lastTargetIdx));
-    const shiftedDrawStartIdx = offsetLegStart(drawStartIdx, drawEndIdx);
-
     out.push({
       ...leg,
-      drawStartIdx: shiftedDrawStartIdx,
+      drawStartIdx,
       drawEndIdx,
     });
   }
@@ -505,13 +499,22 @@ function findCandleIndexForTime(candles: Candle[], targetMs: number) {
   return Math.abs(targetMs - prevStart) <= Math.abs(currentStart - targetMs) ? idx - 1 : idx;
 }
 
-function normalizeSymbolKey(value: string | undefined | null) {
-  return String(value ?? "")
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-}
+function markerColor(marker: RuntimeTradeMarker, bullish: boolean, isProfit: boolean, isLoss: boolean) {
+  if (marker.kind === "break") return 0xd97706;
+  if (marker.kind === "trigger") return 0x2563eb;
 
+  if (marker.kind === "exit") {
+    if (isProfit) return 0x0f766e;
+    if (isLoss) return 0xb91c1c;
+    return 0x475569;
+  }
+
+  return bullish
+    ? 0x0f766e
+    : marker.side === "sell"
+      ? 0xb91c1c
+      : 0x475569;
+}
 
 export default function RuntimePixiChart({
   title,
@@ -561,7 +564,6 @@ export default function RuntimePixiChart({
   const yScaleAnchorRef = useRef<{ ratio: number; price: number } | null>(null);
   const yScaleMetaRef = useRef<{ pTop: number; pRange: number; marginTop: number; innerHeight: number } | null>(null);
   const userInteractedRef = useRef(false);
-  const appliedOverlaySnapshotRef = useRef<string>("");
   const lastFocusTimeRef = useRef<string>("");
   const lastFocusRangeRef = useRef<string>("");
   const yCenterPriceRef = useRef<number | null>(null);
@@ -591,7 +593,6 @@ export default function RuntimePixiChart({
   const [yZoom, setYZoom] = useState(1);
   const [yCenterPrice, setYCenterPrice] = useState<number | null>(null);
   const [rightOffsetBars, setRightOffsetBars] = useState(RIGHT_OFFSET_DEFAULT);
-  const [overlayCandles, setOverlayCandles] = useState<Candle[]>(normalizeFallback(overlayStructureCandlesFallback));
 
   const timeframeMin = useMemo(() => timeframeToMinutes(timeframeLabel), [timeframeLabel]);
   const overlayTimeframeLabel = overlayStructureFromTimeframe?.trim();
@@ -605,6 +606,7 @@ export default function RuntimePixiChart({
     const ratio = Math.max(1, overlayTimeframeMin / Math.max(1, timeframeMin));
     return Math.max(DEFAULT_VISIBLE_BARS_BASE, Math.ceil(DEFAULT_VISIBLE_BARS_BASE * ratio));
   }, [overlayEnabled, overlayTimeframeMin, timeframeMin]);
+  const overlayDefaultVisibleBars = DEFAULT_VISIBLE_BARS_BASE;
   const effectivePivotStrength = useMemo(
     () => Math.max(1, Math.floor(Number.isFinite(Number(pivotStrength)) ? Number(pivotStrength) : 2)),
     [pivotStrength]
@@ -628,6 +630,30 @@ export default function RuntimePixiChart({
     () => normalizeFallback(overlayStructureCandlesFallback),
     [overlayStructureCandlesFallback]
   );
+  const { candles: overlayCandles } = useRuntimeChartData({
+    symbol: overlayEnabled ? symbol : "",
+    timeframeLabel: overlayTimeframeLabel ?? timeframeLabel,
+    normalizedFallback: normalizedOverlayFallback,
+    fallbackSignature: overlayFallbackSignature,
+    defaultVisibleBars: overlayDefaultVisibleBars,
+    historyTargetBars: overlayDefaultVisibleBars,
+    dataMode,
+    useWebSocket,
+    livePrice,
+    liveTimestamp,
+  });
+  const overlayToMainRatio = useMemo(
+    () => Math.max(1, Math.floor(overlayTimeframeMin / Math.max(1, timeframeMin))),
+    [overlayTimeframeMin, timeframeMin]
+  );
+  const mainHistoryTargetBars = useMemo(() => {
+    if (!overlayEnabled || overlayTimeframeMin <= timeframeMin) {
+      return defaultVisibleBars;
+    }
+
+    const projected = overlayCandles.length * overlayToMainRatio + overlayToMainRatio * 8;
+    return Math.max(defaultVisibleBars, Math.min(2000, projected));
+  }, [defaultVisibleBars, overlayCandles.length, overlayEnabled, overlayTimeframeMin, overlayToMainRatio, timeframeMin]);
   const {
     candles,
     wsTicks,
@@ -640,6 +666,7 @@ export default function RuntimePixiChart({
     normalizedFallback,
     fallbackSignature,
     defaultVisibleBars,
+    historyTargetBars: mainHistoryTargetBars,
     dataMode,
     useWebSocket,
     livePrice,
@@ -691,6 +718,11 @@ export default function RuntimePixiChart({
     for (const candle of candles) {
       prices.push(candle.low, candle.high);
     }
+    if (overlayEnabled) {
+      for (const leg of sourceLegs) {
+        prices.push(leg.low, leg.high);
+      }
+    }
     for (const ma of movingAverageSeries) {
       for (const value of ma.values) {
         if (typeof value === "number" && Number.isFinite(value)) {
@@ -719,7 +751,7 @@ export default function RuntimePixiChart({
     const baseTop = max + basePad;
     const baseBottom = min - basePad;
     return { baseTop, baseBottom, baseRange: Math.max(baseTop - baseBottom, 0.00002) };
-  }, [breakLevel, candidateLevels, candles, continuationLevel, movingAverageSeries]);
+  }, [breakLevel, candidateLevels, candles, continuationLevel, movingAverageSeries, overlayEnabled, sourceLegs]);
 
   useEffect(() => {
     rangeRef.current = range;
@@ -739,7 +771,6 @@ export default function RuntimePixiChart({
     setYZoom(1);
     setYCenterPrice(null);
     yScaleAnchorRef.current = null;
-    appliedOverlaySnapshotRef.current = "";
     lastFocusTimeRef.current = "";
     lastFocusRangeRef.current = "";
     pendingRangeRef.current = null;
@@ -748,16 +779,6 @@ export default function RuntimePixiChart({
     pendingCrosshairRef.current.pending = false;
     pendingCrosshairRef.current.value = null;
   }, [dataMode, symbol, timeframeLabel]);
-
-  useEffect(() => {
-    if (!overlayEnabled) return;
-    const nextSnapshot = `${normalizeSymbolKey(symbol)}|${overlayTimeframeLabel}|${overlayFallbackSignature}`;
-    if (appliedOverlaySnapshotRef.current === nextSnapshot) {
-      return;
-    }
-    appliedOverlaySnapshotRef.current = nextSnapshot;
-    setOverlayCandles(normalizedOverlayFallback);
-  }, [overlayEnabled, overlayFallbackSignature, overlayTimeframeLabel, normalizedOverlayFallback, symbol]);
 
   useEffect(() => {
     const node = hostRef.current;
@@ -1447,14 +1468,8 @@ export default function RuntimePixiChart({
           const localEnd = drawEndIdx - start;
           const left = margin.left + localStart * slot;
           const right = margin.left + (localEnd + 1) * slot;
-          let segmentHigh = Number.NEGATIVE_INFINITY;
-          let segmentLow = Number.POSITIVE_INFINITY;
-          for (let i = drawStartIdx; i <= drawEndIdx; i += 1) {
-            segmentHigh = Math.max(segmentHigh, candles[i].high);
-            segmentLow = Math.min(segmentLow, candles[i].low);
-          }
-          const top = toY(segmentHigh);
-          const bottom = toY(segmentLow);
+          const top = toY(leg.high);
+          const bottom = toY(leg.low);
           const widthPx = Math.max(2, right - left);
           const heightPx = Math.max(2, bottom - top);
           const lineColor = leg.direction === "bull" ? 0x0f766e : 0xb91c1c;
@@ -1730,17 +1745,7 @@ export default function RuntimePixiChart({
             ? marker.pnl_points < 0
             : resultText.includes("SL") || resultText.includes("LOSS");
 
-          const baseColor = marker.kind === "exit"
-            ? isProfit
-              ? 0x0f766e
-              : isLoss
-                ? 0xb91c1c
-                : 0x475569
-            : bullish
-              ? 0x0f766e
-              : marker.side === "sell"
-                ? 0xb91c1c
-                : 0x475569;
+          const baseColor = markerColor(marker, bullish, isProfit, isLoss);
 
           if (marker.kind === "entry") {
             const entryPadding = 14;
@@ -1765,7 +1770,10 @@ export default function RuntimePixiChart({
             return;
           }
 
-          const y = toY(marker.price);
+          const markerPrice = typeof marker.price === "number" && Number.isFinite(marker.price)
+            ? marker.price
+            : candleAtIdx.close;
+          const y = toY(markerPrice);
           if (marker.kind === "exit") {
             const tickHalf = Math.max(5, candleW * 0.95);
             const tick = new Graphics();
@@ -1807,15 +1815,33 @@ export default function RuntimePixiChart({
             app.stage.addChild(exitLabel);
             return;
           }
-          const labelText = marker.kind === "exit"
-            ? isProfit
-              ? "P"
-              : isLoss
-                ? "L"
-                : "X"
-            : bullish
-              ? "B"
-              : "S";
+
+          if (marker.kind === "break" || marker.kind === "trigger") {
+            const text = marker.label?.trim() || (marker.kind === "break" ? "BRK" : "TRG");
+            const iconY = marker.kind === "break"
+              ? toY(candleAtIdx.high) - 14
+              : toY(candleAtIdx.low) + 14;
+
+            const box = new Graphics();
+            box.lineStyle(1.4, 0xffffff, 0.95);
+            box.beginFill(baseColor, 0.96);
+            box.drawRoundedRect(x - 14, iconY - 7, 28, 14, 4);
+            box.endFill();
+            app.stage.addChild(box);
+
+            const markerLabel = new Text(text, new TextStyle({
+              fontFamily: "ui-sans-serif, system-ui, sans-serif",
+              fontSize: 9,
+              fill: 0xffffff,
+              fontWeight: "700",
+            }));
+            markerLabel.x = x - markerLabel.width / 2;
+            markerLabel.y = iconY - markerLabel.height / 2;
+            app.stage.addChild(markerLabel);
+            return;
+          }
+
+          const labelText = bullish ? "B" : "S";
 
           const dot = new Graphics();
           dot.lineStyle(1.5, 0xffffff, 1);

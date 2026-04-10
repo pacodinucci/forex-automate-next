@@ -21,7 +21,7 @@ import type {
 import { usePriceStream } from "@/hooks/usePriceStream";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import RuntimePixiChart from "@/components/bots/runtime-pixi-chart";
+import RuntimePixiChart, { type RuntimeTradeMarker } from "@/components/bots/runtime-pixi-chart";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -90,14 +90,128 @@ function asNumber(value: unknown) {
   return undefined;
 }
 
+function getDetailAsRecord(details: unknown): Record<string, unknown> {
+  return details && typeof details === "object" && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : {};
+}
+
+function toIsoFromUnknown(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const ms = value > 10_000_000_000 ? value : value * 1000;
+    return new Date(ms).toISOString();
+  }
+  if (typeof value === "string" && value.trim()) {
+    const ms = Date.parse(value);
+    if (!Number.isNaN(ms)) {
+      return new Date(ms).toISOString();
+    }
+  }
+  return null;
+}
+
+function extractMarkerKind(eventName: string, details: Record<string, unknown>) {
+  const blob = `${eventName} ${JSON.stringify(details)}`.toLowerCase();
+  if (/(structure_break|breakout|break|bos|quiebre)/.test(blob)) return "break";
+  if (/(trigger|entry_signal|signal_fire|entry_confirm|entry_ready)/.test(blob)) return "trigger";
+  if (/(manual_close|strategy_close|closed|close|exit|salida|take_profit|stop_loss|\btp\b|\bsl\b)/.test(blob)) {
+    return "exit";
+  }
+  return null;
+}
+
+function extractMarkerTime(logTimeUtc: string, details: Record<string, unknown>) {
+  const candidates = [
+    details.timeUtc,
+    details.time_utc,
+    details.event_time_utc,
+    details.event_time,
+    details.candle_time_utc,
+    details.bar_time_utc,
+    details.trigger_time_utc,
+    details.break_time_utc,
+    details.exit_time_utc,
+    details.timestamp,
+    logTimeUtc,
+  ];
+
+  for (const item of candidates) {
+    const iso = toIsoFromUnknown(item);
+    if (iso) return iso;
+  }
+  return null;
+}
+
+function extractMarkerPrice(details: Record<string, unknown>) {
+  const candidates = [
+    details.price,
+    details.break_price,
+    details.breakout_price,
+    details.structure_break_price,
+    details.trigger_price,
+    details.entry_price,
+    details.exit_price,
+    details.close_price,
+    details.level,
+    details.continuation_level,
+  ];
+  for (const item of candidates) {
+    const parsed = asNumber(item);
+    if (parsed !== undefined) return parsed;
+  }
+  return undefined;
+}
+
+function extractMarkerSide(details: Record<string, unknown>): RuntimeTradeMarker["side"] {
+  const raw = String(details.side ?? details.direction ?? details.order_side ?? "").toLowerCase();
+  if (raw === "buy" || raw === "bull" || raw === "long") return "buy";
+  if (raw === "sell" || raw === "bear" || raw === "short") return "sell";
+  return "unknown";
+}
+
+function buildStrategyEventMarkers(logs: BotLogsResponse["logs"]): RuntimeTradeMarker[] {
+  const out: RuntimeTradeMarker[] = [];
+  const dedup = new Set<string>();
+
+  for (const log of logs) {
+    const details = getDetailAsRecord(log.details);
+    const kind = extractMarkerKind(log.event, details);
+    if (!kind) continue;
+
+    const timeUtc = extractMarkerTime(log.timeUtc, details);
+    if (!timeUtc) continue;
+
+    const marker: RuntimeTradeMarker = {
+      id: `${log.id}:${kind}`,
+      time_utc: timeUtc,
+      kind,
+      side: extractMarkerSide(details),
+      price: extractMarkerPrice(details),
+      result: String(details.result ?? details.reason ?? details.close_reason ?? ""),
+      pnl_points: asNumber(details.pnl_points ?? details.pnl ?? details.profit),
+      label: kind === "break" ? "BRK" : kind === "trigger" ? "TRG" : "OUT",
+    };
+
+    const key = `${marker.kind}|${marker.time_utc}|${marker.price ?? "na"}|${marker.side ?? "na"}`;
+    if (dedup.has(key)) continue;
+    dedup.add(key);
+    out.push(marker);
+  }
+
+  out.sort((a, b) => Date.parse(a.time_utc) - Date.parse(b.time_utc));
+  return out.slice(-300);
+}
+
 function RuntimeStateCard({
   runtimeState,
   livePrice,
   liveTimestamp,
+  eventMarkers = [],
 }: {
   runtimeState: BotStrategyRuntimeState;
   livePrice?: number;
   liveTimestamp?: number;
+  eventMarkers?: RuntimeTradeMarker[];
 }) {
   const strategyId = String(runtimeState.strategy ?? "").toLowerCase();
   const isPeakDipH4 = strategyId === "peak_dip";
@@ -267,6 +381,7 @@ function RuntimeStateCard({
                 currentLeg={m5CurrentLeg}
                 showLegLabels={isLegContinuationM5M1}
                 pivotStrength={asNumber(runtimeState.pivot_strength)}
+                tradeMarkers={eventMarkers}
               />
               <RuntimePixiChart
                 title={`${entryTimeframeLabel} entry`}
@@ -280,6 +395,7 @@ function RuntimeStateCard({
                 showLegLabels={isLegContinuationM5M1}
                 overlayStructureFromTimeframe={isLegContinuationM5M1 ? setupTimeframeLabel : undefined}
                 overlayStructureCandlesFallback={isLegContinuationM5M1 ? legContinuationSetupCandles : []}
+                tradeMarkers={eventMarkers}
               />
               <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
                 <div>Stage: {currentStage}</div>
@@ -317,6 +433,7 @@ export default function BotDetailPage() {
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const strategyEventMarkers = useMemo(() => buildStrategyEventMarkers(logs), [logs]);
 
   const primaryAction = useMemo(() => (bot ? getPrimaryAction(bot.status) : "start"), [bot]);
   const showRuntimeState = Boolean(bot?.status === "RUNNING" && bot.runtimeActive && bot.strategyRuntimeState);
@@ -452,6 +569,18 @@ export default function BotDetailPage() {
       </div>
 
       {error ? <div className="text-sm text-destructive">{error}</div> : null}
+      {bot.lastError ? (
+        <Card className="border-destructive/40">
+          <CardHeader>
+            <CardTitle>Last backend error</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="overflow-x-auto rounded-md border bg-destructive/10 p-3 text-xs text-destructive">
+              {bot.lastError}
+            </pre>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader>
@@ -489,6 +618,7 @@ export default function BotDetailPage() {
           runtimeState={bot.strategyRuntimeState!}
           livePrice={livePrice}
           liveTimestamp={liveQuote?.timestamp}
+          eventMarkers={strategyEventMarkers}
         />
       ) : null}
 

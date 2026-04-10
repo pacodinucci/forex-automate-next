@@ -77,6 +77,61 @@ function mergeQuote(previous: LiveQuote | undefined, incoming: LiveQuote) {
   };
 }
 
+function mergeQuoteMap(
+  current: Record<string, LiveQuote>,
+  incomingQuotes: QuoteLike[]
+) {
+  if (incomingQuotes.length === 0) {
+    return current;
+  }
+
+  const next = { ...current };
+
+  for (const item of incomingQuotes) {
+    const quote = toLiveQuote(item);
+    if (!quote) continue;
+
+    const rawSymbol = String(quote.symbol);
+    const normalizedSymbol = normalizeSymbolKey(rawSymbol);
+
+    const previous =
+      current[rawSymbol] ??
+      (normalizedSymbol ? current[normalizedSymbol] : undefined);
+
+    const merged = mergeQuote(previous, quote);
+    next[rawSymbol] = merged;
+    if (normalizedSymbol) {
+      next[normalizedSymbol] = merged;
+    }
+  }
+
+  return next;
+}
+
+async function fetchPricesSnapshot(symbols: string[]): Promise<QuoteLike[]> {
+  if (symbols.length === 0) return [];
+
+  const params = new URLSearchParams();
+  params.set("symbols", symbols.join(","));
+  const response = await fetch(`/api/market/prices?${params.toString()}`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = (await response.json().catch(() => null)) as unknown;
+  if (!payload || typeof payload !== "object" || !("prices" in payload)) {
+    return [];
+  }
+
+  const prices = (payload as { prices?: unknown }).prices;
+  return Array.isArray(prices)
+    ? prices.map(asQuoteLike).filter((item): item is QuoteLike => Boolean(item))
+    : [];
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -222,15 +277,7 @@ export function usePriceStream(symbols: string[], interval = 1) {
           return;
         }
 
-        setQuotes((current) => {
-          const next = { ...current };
-          for (const item of extracted) {
-            const quote = toLiveQuote(item);
-            if (!quote) continue;
-            next[quote.symbol] = mergeQuote(current[quote.symbol], quote);
-          }
-          return next;
-        });
+        setQuotes((current) => mergeQuoteMap(current, extracted));
       } catch {
         setConnectionStatus("error");
       }
@@ -270,6 +317,44 @@ export function usePriceStream(symbols: string[], interval = 1) {
       }
     };
   }, [interval, normalizedSymbols, reconnectNonce]);
+
+  useEffect(() => {
+    if (normalizedSymbols.length === 0) {
+      return;
+    }
+
+    let disposed = false;
+
+    const loadSnapshot = async () => {
+      const stale = Date.now() - lastMessageAtRef.current > 8_000;
+      const shouldFetch = connectionStatus !== "open" || stale || lastMessageAt === null;
+      if (!shouldFetch) {
+        return;
+      }
+
+      try {
+        const snapshot = await fetchPricesSnapshot(normalizedSymbols);
+        if (disposed || snapshot.length === 0) {
+          return;
+        }
+
+        setLastMessageAt(Date.now());
+        setQuotes((current) => mergeQuoteMap(current, snapshot));
+      } catch {
+        // Keep hook resilient; WS reconnect logic remains primary path.
+      }
+    };
+
+    void loadSnapshot();
+    const timer = window.setInterval(() => {
+      void loadSnapshot();
+    }, 3_000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [connectionStatus, lastMessageAt, normalizedSymbols]);
 
   const status: StreamStatus = normalizedSymbols.length === 0 ? "idle" : connectionStatus;
 

@@ -19,6 +19,7 @@ type UseRuntimeChartDataOptions = {
   normalizedFallback: RuntimeChartCandle[];
   fallbackSignature: string;
   defaultVisibleBars: number;
+  historyTargetBars?: number;
   dataMode?: RuntimeChartDataMode;
   useWebSocket?: boolean;
   livePrice?: number;
@@ -180,6 +181,7 @@ export function useRuntimeChartData({
   normalizedFallback,
   fallbackSignature,
   defaultVisibleBars,
+  historyTargetBars,
   dataMode = "live",
   useWebSocket = true,
   livePrice,
@@ -196,6 +198,10 @@ export function useRuntimeChartData({
 
   const wsSymbol = useMemo(() => normalizeSymbolKey(symbol), [symbol]);
   const timeframeMin = useMemo(() => timeframeToMinutes(timeframeLabel), [timeframeLabel]);
+  const resolvedHistoryTargetBars = useMemo(
+    () => Math.min(2000, Math.max(defaultVisibleBars, Math.floor(historyTargetBars ?? defaultVisibleBars))),
+    [defaultVisibleBars, historyTargetBars]
+  );
   const effectiveLivePrice = isLive ? (wsLive.price ?? livePrice) : undefined;
   const effectiveLiveTimestamp = isLive ? (wsLive.timestamp ?? liveTimestamp) : undefined;
 
@@ -215,10 +221,10 @@ export function useRuntimeChartData({
   useEffect(() => {
     if (!isLive || !symbol) return;
     let cancelled = false;
-    const backfillKey = `${normalizeSymbolKey(symbol)}|${timeframeLabel}`;
+    const backfillKey = `${normalizeSymbolKey(symbol)}|${timeframeLabel}|${resolvedHistoryTargetBars}`;
 
     async function backfillHistory() {
-      if (candles.length >= defaultVisibleBars) {
+      if (candles.length >= resolvedHistoryTargetBars) {
         return;
       }
       const attempts = backfillAttemptsRef.current.get(backfillKey) ?? 0;
@@ -231,7 +237,8 @@ export function useRuntimeChartData({
       for (const tf of aliases) {
         try {
           const params = new URLSearchParams();
-          params.set("limit", String(Math.max(defaultVisibleBars * 5, 120)));
+          const fetchLimit = Math.min(2000, Math.max(resolvedHistoryTargetBars, 120));
+          params.set("limit", String(fetchLimit));
           const url = `/api/history/${encodeURIComponent(symbol)}/${encodeURIComponent(tf)}?${params.toString()}`;
           const response = await fetch(url, { cache: "no-store" });
           if (!response.ok) continue;
@@ -251,7 +258,7 @@ export function useRuntimeChartData({
     return () => {
       cancelled = true;
     };
-  }, [candles.length, defaultVisibleBars, isLive, symbol, timeframeLabel]);
+  }, [candles.length, isLive, resolvedHistoryTargetBars, symbol, timeframeLabel]);
 
   useEffect(() => {
     if (!isLive || !useWebSocket || !wsSymbol) return;
@@ -365,4 +372,3 @@ export function useRuntimeChartData({
     isLive,
   };
 }
-

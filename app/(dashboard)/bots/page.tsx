@@ -80,7 +80,43 @@ function priceTone(direction: LiveQuote["direction"]) {
 function detectRateLimitSignal(payload: MarketRuntimeHealthResponse | null) {
   if (!payload) return false;
   const blob = JSON.stringify(payload).toLowerCase();
-  return /(request_frequency_exceeded|rate_limit|throttle|backoff|429)/.test(blob);
+  return /(request_frequency_exceeded|rate_limit|throttle|backoff|429)/.test(
+    blob,
+  );
+}
+
+function normalizeSymbolKey(value: string | undefined | null) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function pickQuoteForBot(quotes: Record<string, LiveQuote>, bot: Bot) {
+  const candidates = [
+    bot.symbol,
+    bot.instrument,
+    normalizeSymbolKey(bot.symbol),
+    normalizeSymbolKey(bot.instrument),
+  ].filter(Boolean);
+
+  for (const key of candidates) {
+    const quote = quotes[String(key)];
+    if (quote) {
+      return quote;
+    }
+  }
+
+  const normalizedCandidates = new Set(
+    candidates.map((item) => normalizeSymbolKey(String(item))),
+  );
+  for (const [key, quote] of Object.entries(quotes)) {
+    if (normalizedCandidates.has(normalizeSymbolKey(key))) {
+      return quote;
+    }
+  }
+
+  return undefined;
 }
 
 export default function BotsPage() {
@@ -88,18 +124,30 @@ export default function BotsPage() {
   const [openCreate, setOpenCreate] = useState(false);
   const [createMode, setCreateMode] = useState<CreateMode>("single");
   const [actingId, setActingId] = useState<string | null>(null);
-  const [bulkAction, setBulkAction] = useState<"pause" | "resume" | "stop" | "delete" | null>(null);
+  const [bulkAction, setBulkAction] = useState<
+    "pause" | "resume" | "stop" | "delete" | null
+  >(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
-  const [runtimeHealth, setRuntimeHealth] = useState<MarketRuntimeHealthResponse | null>(null);
-  const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(null);
+  const [runtimeHealth, setRuntimeHealth] =
+    useState<MarketRuntimeHealthResponse | null>(null);
+  const [runtimeHealthError, setRuntimeHealthError] = useState<string | null>(
+    null,
+  );
   const [runtimeHealthLoading, setRuntimeHealthLoading] = useState(false);
-  const [runtimeHealthCheckedAt, setRuntimeHealthCheckedAt] = useState<Date | null>(null);
+  const [runtimeHealthCheckedAt, setRuntimeHealthCheckedAt] =
+    useState<Date | null>(null);
 
   const runningSymbols = useMemo(
-    () => [...new Set(bots.filter((bot) => bot.status === "RUNNING" && bot.runtimeActive).map((bot) => bot.symbol))],
-    [bots]
+    () => [
+      ...new Set(
+        bots
+          .filter((bot) => bot.status === "RUNNING" && bot.runtimeActive)
+          .map((bot) => bot.symbol),
+      ),
+    ],
+    [bots],
   );
   const { quotes, status: streamStatus } = usePriceStream(runningSymbols, 1);
 
@@ -134,7 +182,9 @@ export default function BotsPage() {
       setRuntimeHealth(data);
       setRuntimeHealthCheckedAt(new Date());
     } catch (err) {
-      setRuntimeHealthError(err instanceof Error ? err.message : "Could not load runtime health");
+      setRuntimeHealthError(
+        err instanceof Error ? err.message : "Could not load runtime health",
+      );
     } finally {
       setRuntimeHealthLoading(false);
     }
@@ -166,7 +216,9 @@ export default function BotsPage() {
       await refresh();
       await loadRuntimeHealth();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not complete action");
+      setActionError(
+        err instanceof Error ? err.message : "Could not complete action",
+      );
     } finally {
       setActingId(null);
     }
@@ -180,7 +232,11 @@ export default function BotsPage() {
     const candidates = bots.filter((bot) => {
       if (action === "pause") return bot.status === "RUNNING";
       if (action === "resume") return bot.status === "PAUSED";
-      return bot.status === "RUNNING" || bot.status === "PAUSED" || bot.status === "ERROR";
+      return (
+        bot.status === "RUNNING" ||
+        bot.status === "PAUSED" ||
+        bot.status === "ERROR"
+      );
     });
 
     if (candidates.length === 0) {
@@ -192,18 +248,20 @@ export default function BotsPage() {
       setActionError(null);
       const result = await runBotsAction(
         candidates.map((bot) => bot.id),
-        action
+        action,
       );
 
       if (result.failed > 0) {
         setActionError(
-          `Global ${action}: ${result.succeeded}/${result.total} bots updated. ${result.failed} failed.`
+          `Global ${action}: ${result.succeeded}/${result.total} bots updated. ${result.failed} failed.`,
         );
       }
 
       await Promise.all([refresh(), loadRuntimeHealth()]);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not complete bulk action");
+      setActionError(
+        err instanceof Error ? err.message : "Could not complete bulk action",
+      );
     } finally {
       setBulkAction(null);
     }
@@ -221,13 +279,15 @@ export default function BotsPage() {
 
       if (result.failed > 0) {
         setActionError(
-          `Global delete: ${result.succeeded}/${result.total} bots deleted. ${result.failed} failed.`
+          `Global delete: ${result.succeeded}/${result.total} bots deleted. ${result.failed} failed.`,
         );
       }
 
       await Promise.all([refresh(), loadRuntimeHealth()]);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not complete bulk delete");
+      setActionError(
+        err instanceof Error ? err.message : "Could not complete bulk delete",
+      );
     } finally {
       setBulkAction(null);
     }
@@ -236,7 +296,10 @@ export default function BotsPage() {
   const runningCount = bots.filter((bot) => bot.status === "RUNNING").length;
   const pausedCount = bots.filter((bot) => bot.status === "PAUSED").length;
   const stoppableCount = bots.filter(
-    (bot) => bot.status === "RUNNING" || bot.status === "PAUSED" || bot.status === "ERROR"
+    (bot) =>
+      bot.status === "RUNNING" ||
+      bot.status === "PAUSED" ||
+      bot.status === "ERROR",
   ).length;
 
   function openCreateModal(mode: CreateMode) {
@@ -251,12 +314,21 @@ export default function BotsPage() {
           <div className="space-y-1">
             <span className="premium-chip bg-accent/45">Bot Operations</span>
             <h1 className="text-2xl font-semibold tracking-tight">Bots</h1>
-            <p className="text-sm text-muted-foreground">Price stream: {streamStatus}</p>
+            <p className="text-sm text-muted-foreground">
+              Price stream: {streamStatus}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={handleRefreshAll}>Refresh</Button>
-            <Button variant="outline" onClick={() => openCreateModal("bulk")}>Multiple bots</Button>
-            <Button className="shadow-sm" onClick={() => openCreateModal("single")}>
+            <Button variant="secondary" onClick={handleRefreshAll}>
+              Refresh
+            </Button>
+            <Button variant="outline" onClick={() => openCreateModal("bulk")}>
+              Multiple bots
+            </Button>
+            <Button
+              className="shadow-sm"
+              onClick={() => openCreateModal("single")}
+            >
               <Plus className="mr-2 h-4 w-4" />
               New bot
             </Button>
@@ -267,9 +339,15 @@ export default function BotsPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm">
               <span className="font-medium">Runtime health:</span>{" "}
-              {runtimeReady === true ? "Ready" : runtimeReady === false ? "Not ready" : "Unknown"}
+              {runtimeReady === true
+                ? "Ready"
+                : runtimeReady === false
+                  ? "Not ready"
+                  : "Unknown"}
               {hasRateLimitSignals ? (
-                <span className="ml-2 text-amber-700">(rate-limit signals detected)</span>
+                <span className="ml-2 text-amber-700">
+                  (rate-limit signals detected)
+                </span>
               ) : null}
             </div>
             <div className="flex items-center gap-2">
@@ -278,27 +356,45 @@ export default function BotsPage() {
                   Updated {runtimeHealthCheckedAt.toLocaleTimeString()}
                 </span>
               ) : null}
-              <Button size="sm" variant="outline" onClick={loadRuntimeHealth} disabled={runtimeHealthLoading}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={loadRuntimeHealth}
+                disabled={runtimeHealthLoading}
+              >
                 {runtimeHealthLoading ? "Checking..." : "Check runtime"}
               </Button>
             </div>
           </div>
           {runtimeHealthError ? (
-            <div className="mt-2 text-sm text-destructive">{runtimeHealthError}</div>
+            <div className="mt-2 text-sm text-destructive">
+              {runtimeHealthError}
+            </div>
+          ) : null}
+          {!runtimeHealthError && runtimeHealth && runtimeReady !== true ? (
+            <pre className="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-2 text-xs">
+              {JSON.stringify(runtimeHealth, null, 2)}
+            </pre>
           ) : null}
         </div>
       </div>
 
       {loading ? <div>Loading bots...</div> : null}
       {error ? <div className="text-sm text-destructive">{error}</div> : null}
-      {actionError ? <div className="text-sm text-destructive">{actionError}</div> : null}
+      {actionError ? (
+        <div className="text-sm text-destructive">{actionError}</div>
+      ) : null}
 
       {!loading && bots.length === 0 ? (
         <div className="premium-panel p-6 text-center text-muted-foreground">
           No bots yet.
           <div className="mt-3 flex items-center justify-center gap-2">
-            <Button variant="outline" onClick={() => openCreateModal("bulk")}>Create multiple</Button>
-            <Button onClick={() => openCreateModal("single")}>Create first bot</Button>
+            <Button variant="outline" onClick={() => openCreateModal("bulk")}>
+              Create multiple
+            </Button>
+            <Button onClick={() => openCreateModal("single")}>
+              Create first bot
+            </Button>
           </div>
         </div>
       ) : null}
@@ -313,7 +409,7 @@ export default function BotsPage() {
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search or filter..."
-                  className="h-10 rounded-full border border-white/15 bg-white/90 pr-4 pl-9 text-slate-700 shadow-none focus-visible:ring-2"
+                  className="h-10 rounded-full border-none bg-transparent pr-4 pl-9 text-slate-400 shadow-none focus-visible:ring-0"
                 />
               </div>
 
@@ -363,27 +459,51 @@ export default function BotsPage() {
           </div>
 
           {filteredBots.length === 0 ? (
-            <div className="p-6 text-sm text-muted-foreground">No bots match this filter.</div>
+            <div className="p-6 text-sm text-muted-foreground">
+              No bots match this filter.
+            </div>
           ) : (
             <Table className="min-w-[1080px] px-3 pb-3 text-sm">
               <TableHeader>
                 <TableRow className="border-b bg-secondary/45 hover:bg-secondary/45">
-                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Status</TableHead>
-                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Name</TableHead>
-                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Symbol</TableHead>
-                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Strategy</TableHead>
-                  <TableHead className="h-11 px-4 text-right text-[11px] font-semibold tracking-[0.04em] uppercase">Price</TableHead>
-                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Runtime</TableHead>
-                  <TableHead className="h-11 px-4 text-right text-[11px] font-semibold tracking-[0.04em] uppercase">Updated</TableHead>
-                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">Actions</TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Status
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Name
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Symbol
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Strategy
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-right text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Price
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Runtime
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Last error
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-right text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Updated
+                  </TableHead>
+                  <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
+                    Actions
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredBots.map((bot) => {
                   const isActing = actingId === bot.id;
-                  const quote = quotes[bot.symbol];
+                  const quote = pickQuoteForBot(quotes, bot);
                   const primaryAction = getPrimaryAction(bot.status);
-                  const canStop = bot.status === "RUNNING" || bot.status === "PAUSED" || bot.status === "ERROR";
+                  const canStop =
+                    bot.status === "RUNNING" ||
+                    bot.status === "PAUSED" ||
+                    bot.status === "ERROR";
                   const isLive = bot.status === "RUNNING" && bot.runtimeActive;
                   const price = isLive ? getPrimaryPrice(quote) : undefined;
 
@@ -392,32 +512,72 @@ export default function BotsPage() {
                       key={bot.id}
                       className={cn(
                         "h-12 border-b border-border/70 bg-card hover:bg-emerald-100/35",
-                        "odd:bg-card even:bg-secondary/28"
+                        "odd:bg-card even:bg-secondary/28",
                       )}
                     >
                       <TableCell className="px-4">
                         <span className="inline-flex h-4 w-7 items-center rounded-full bg-slate-200 p-0.5">
-                          <span className={cn("h-3 w-3 rounded-full", rowStatusTone(bot))} />
+                          <span
+                            className={cn(
+                              "h-3 w-3 rounded-full",
+                              rowStatusTone(bot),
+                            )}
+                          />
                         </span>
                       </TableCell>
 
-                      <TableCell className="px-4 font-medium text-slate-700">{bot.name || `${bot.symbol}_${bot.strategy}`}</TableCell>
-                      <TableCell className="px-4 text-slate-700">{bot.symbol}</TableCell>
-                      <TableCell className="px-4 text-slate-700">{bot.strategy}</TableCell>
+                      <TableCell className="px-4 font-medium text-slate-700">
+                        {bot.name || `${bot.symbol}_${bot.strategy}`}
+                      </TableCell>
+                      <TableCell className="px-4 text-slate-700">
+                        {bot.symbol}
+                      </TableCell>
+                      <TableCell className="px-4 text-slate-700">
+                        {bot.strategy}
+                      </TableCell>
 
-                      <TableCell className={cn("px-4 text-right font-semibold tabular-nums", priceTone(quote?.direction))}>
+                      <TableCell
+                        className={cn(
+                          "px-4 text-right font-semibold tabular-nums",
+                          priceTone(quote?.direction),
+                        )}
+                      >
                         {formatPrice(price)}
                       </TableCell>
 
-                      <TableCell className="px-4 text-slate-700">{bot.runtimeActive ? "Active" : "Idle"}</TableCell>
+                      <TableCell className="px-4 text-slate-700">
+                        {bot.runtimeActive ? "Active" : "Idle"}
+                      </TableCell>
+
+                      <TableCell className="max-w-[280px] px-4 text-xs text-slate-700">
+                        {bot.lastError ? (
+                          <span
+                            className="block truncate text-destructive"
+                            title={bot.lastError}
+                          >
+                            {bot.lastError}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
 
                       <TableCell className="px-4 text-right tabular-nums text-slate-600">
-                        {quote?.timestamp ? new Date(quote.timestamp * 1000).toLocaleTimeString() : "-"}
+                        {quote?.timestamp
+                          ? new Date(
+                              quote.timestamp * 1000,
+                            ).toLocaleTimeString()
+                          : "-"}
                       </TableCell>
 
                       <TableCell className="px-4">
                         <div className="flex flex-wrap gap-1.5">
-                          <Button asChild size="sm" variant="outline" className="h-8 px-2.5">
+                          <Button
+                            asChild
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2.5"
+                          >
                             <Link href={`/bots/${bot.id}`}>Detalle</Link>
                           </Button>
 
@@ -428,7 +588,11 @@ export default function BotsPage() {
                             onClick={() => handleAction(bot.id, primaryAction)}
                             disabled={isActing}
                           >
-                            {bot.status === "RUNNING" ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                            {bot.status === "RUNNING" ? (
+                              <Pause className="h-4 w-4" />
+                            ) : (
+                              <Play className="h-4 w-4" />
+                            )}
                           </Button>
 
                           {canStop ? (

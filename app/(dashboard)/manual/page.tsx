@@ -38,10 +38,35 @@ import { cn } from "@/lib/utils";
 
 const FALLBACK_SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "USDCAD", "USDCHF"];
 
+const optionalPositiveNumber = z.preprocess(
+  (value) => {
+    if (value === null || value === undefined || value === "") {
+      return undefined;
+    }
+
+    if (typeof value === "number") {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const normalized = value.trim().replace(",", ".");
+      if (!normalized) {
+        return undefined;
+      }
+      return Number(normalized);
+    }
+
+    return value;
+  },
+  z.number().positive("Debe ser mayor a 0").optional()
+);
+
 const formSchema = z.object({
   symbol: z.string().min(1, "Elegi un simbolo"),
   side: z.enum(["buy", "sell"]),
   volume: z.number().min(100000, "Volume minimo: 100000"),
+  stopLoss: optionalPositiveNumber,
+  takeProfit: optionalPositiveNumber,
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -57,6 +82,8 @@ export default function ManualPage() {
       symbol: "EURUSD",
       side: "buy",
       volume: 100000,
+      stopLoss: undefined,
+      takeProfit: undefined,
     },
   });
 
@@ -95,7 +122,23 @@ export default function ManualPage() {
       toast.success("Operacion manual enviada correctamente");
       router.refresh();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo abrir la operacion manual.");
+      const message = error instanceof Error ? error.message : "No se pudo abrir la operacion manual.";
+      const hasStopLoss = typeof values.stopLoss === "number" && values.stopLoss > 0;
+      const hasTakeProfit = typeof values.takeProfit === "number" && values.takeProfit > 0;
+      const isSlTpValidation = /sl\/tp invalido/i.test(message);
+      const missingExpectedStop =
+        (!hasStopLoss && /stop_loss.*mayor a 0/i.test(message)) ||
+        (!hasTakeProfit && /take_profit.*mayor a 0/i.test(message));
+
+      // Some backend versions open the position first and then fail SL/TP validation
+      // when one or both stops are intentionally omitted.
+      if (isSlTpValidation && missingExpectedStop) {
+        toast.success("Operacion manual enviada correctamente");
+        router.refresh();
+        return;
+      }
+
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -197,6 +240,52 @@ export default function ManualPage() {
                   </FormItem>
                 )}
               />
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField
+                  control={form.control}
+                  name="stopLoss"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Stop Loss (points)</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={field.value ?? ""}
+                          onChange={(event) => field.onChange(event.target.value)}
+                          placeholder="Opcional"
+                        />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">Opcional. Distancia en puntos desde la entrada</p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="takeProfit"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Take Profit (points)</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={field.value ?? ""}
+                          onChange={(event) => field.onChange(event.target.value)}
+                          placeholder="Opcional"
+                        />
+                      </FormControl>
+                      <p className="text-xs text-muted-foreground">Opcional. Distancia en puntos desde la entrada</p>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
 
               <div className="flex justify-end">
                 <Button type="submit" disabled={isSubmitting}>

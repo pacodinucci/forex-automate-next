@@ -33,6 +33,7 @@ type RawBot = Partial<Bot> & {
   name?: string | null;
   status?: BotStatus;
   isDeleted?: boolean;
+  strategyRuntimeStage?: string | null;
   strategyRuntimeState?: BotStrategyRuntimeState | null;
 };
 
@@ -58,6 +59,7 @@ export function normalizeBot(raw: RawBot): Bot {
     strategyParams: params,
     status: raw.status ?? "STOPPED",
     runtimeActive: raw.runtimeActive ?? false,
+    strategyRuntimeStage: raw.strategyRuntimeStage ?? null,
     strategyRuntimeState: raw.strategyRuntimeState ?? null,
     isDeleted: raw.isDeleted ?? false,
     lastError: raw.lastError ?? null,

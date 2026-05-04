@@ -46,6 +46,15 @@ export type BotRuntimeH4Progress = {
   message?: string;
 };
 
+export type LegContinuationCurrentSetup = {
+  side?: "buy" | "sell" | string;
+  continuation_level?: number;
+  search_start?: string;
+  search_end?: string;
+  breakout_time?: string | null;
+  [key: string]: unknown;
+};
+
 export type BotStrategyRuntimeState = {
   strategy?: string;
   symbol?: string;
@@ -57,7 +66,7 @@ export type BotStrategyRuntimeState = {
   m15_count?: number;
   m1_count?: number;
   pivot_strength?: number;
-  current_setup?: Record<string, unknown> | null;
+  current_setup?: LegContinuationCurrentSetup | Record<string, unknown> | null;
   h4_last_4?: BotRuntimeH4Candle[];
   m1_last_4?: BotRuntimeH4Candle[];
   m15_last_4?: BotRuntimeH4Candle[];
@@ -79,6 +88,7 @@ export type Bot = {
   strategyParams: Record<string, unknown>;
   status: BotStatus;
   runtimeActive: boolean;
+  strategyRuntimeStage: string | null;
   strategyRuntimeState?: BotStrategyRuntimeState | null;
   isDeleted: boolean;
   lastError: string | null;

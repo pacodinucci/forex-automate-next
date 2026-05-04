@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Pause, Play, Plus, Search, Square, Trash2 } from "lucide-react";
+import { Pause, Play, Plus, Search, Square, Trash2, Bolt } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import CreateBotModal from "@/components/bots/create-bot-modal";
 import { Button } from "@/components/ui/button";
@@ -75,6 +75,47 @@ function priceTone(direction: LiveQuote["direction"]) {
   }
 
   return "text-slate-700";
+}
+
+function mapStageLabel(stage: string | null, runtimeActive: boolean): string {
+  if (!stage) {
+    return runtimeActive ? "Inicializando" : "-";
+  }
+
+  switch (stage) {
+    case "WAITING_M5_LEGS":
+      return "Esperando estructura M5";
+    case "WAITING_M5_BREAKOUT":
+      return "Esperando breakout M5";
+    case "WAITING_M1_ENTRY":
+      return "Esperando entrada M1";
+    default:
+      return stage;
+  }
+}
+
+function mapStageTone(stage: string | null): "neutral" | "info" | "warn" {
+  switch (stage) {
+    case "WAITING_M5_LEGS":
+      return "neutral";
+    case "WAITING_M5_BREAKOUT":
+      return "info";
+    case "WAITING_M1_ENTRY":
+      return "warn";
+    default:
+      return "neutral";
+  }
+}
+
+function stageBadgeClassName(tone: "neutral" | "info" | "warn") {
+  switch (tone) {
+    case "info":
+      return "border-sky-200 bg-sky-50 text-sky-700";
+    case "warn":
+      return "border-amber-200 bg-amber-50 text-amber-700";
+    default:
+      return "border-slate-200 bg-slate-50 text-slate-700";
+  }
 }
 
 function detectRateLimitSignal(payload: MarketRuntimeHealthResponse | null) {
@@ -162,6 +203,7 @@ export default function BotsPage() {
         bot.strategy,
         bot.accountId,
         bot.status,
+        bot.strategyRuntimeStage,
       ]
         .filter(Boolean)
         .join(" ")
@@ -485,7 +527,7 @@ export default function BotsPage() {
                     Runtime
                   </TableHead>
                   <TableHead className="h-11 px-4 text-[11px] font-semibold tracking-[0.04em] uppercase">
-                    Last error
+                    Etapa
                   </TableHead>
                   <TableHead className="h-11 px-4 text-right text-[11px] font-semibold tracking-[0.04em] uppercase">
                     Updated
@@ -506,6 +548,11 @@ export default function BotsPage() {
                     bot.status === "ERROR";
                   const isLive = bot.status === "RUNNING" && bot.runtimeActive;
                   const price = isLive ? getPrimaryPrice(quote) : undefined;
+                  const stageLabel = mapStageLabel(
+                    bot.strategyRuntimeStage,
+                    Boolean(bot.runtimeActive),
+                  );
+                  const stageTone = mapStageTone(bot.strategyRuntimeStage);
 
                   return (
                     <TableRow
@@ -549,17 +596,16 @@ export default function BotsPage() {
                         {bot.runtimeActive ? "Active" : "Idle"}
                       </TableCell>
 
-                      <TableCell className="max-w-[280px] px-4 text-xs text-slate-700">
-                        {bot.lastError ? (
-                          <span
-                            className="block truncate text-destructive"
-                            title={bot.lastError}
-                          >
-                            {bot.lastError}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
+                      <TableCell className="px-4">
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium",
+                            stageBadgeClassName(stageTone),
+                          )}
+                          title={bot.strategyRuntimeStage ?? undefined}
+                        >
+                          {stageLabel}
+                        </span>
                       </TableCell>
 
                       <TableCell className="px-4 text-right tabular-nums text-slate-600">
@@ -570,15 +616,17 @@ export default function BotsPage() {
                           : "-"}
                       </TableCell>
 
-                      <TableCell className="px-4">
+                      <TableCell className="px-2">
                         <div className="flex flex-wrap gap-1.5">
                           <Button
                             asChild
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-2.5"
+                            size="icon"
+                            variant="secondary"
+                            className="h-8 w-8"
                           >
-                            <Link href={`/bots/${bot.id}`}>Detalle</Link>
+                            <Link href={`/bots/${bot.id}`}>
+                              <Bolt className="h-4 w-4" />
+                            </Link>
                           </Button>
 
                           <Button

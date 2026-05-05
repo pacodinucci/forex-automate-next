@@ -58,8 +58,8 @@ const optionalPositiveNumber = z.preprocess(
 
     return value;
   },
-  z.number().positive("Debe ser mayor a 0").optional()
-);
+  z.number().positive("Debe ser mayor a 0")
+).optional();
 
 const formSchema = z.object({
   symbol: z.string().min(1, "Elegi un simbolo"),

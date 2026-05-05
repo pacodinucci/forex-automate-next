@@ -69,7 +69,10 @@ const formSchema = z.object({
   takeProfit: optionalPositiveNumber,
 });
 
-type FormInputValues = z.input<typeof formSchema>;
+type FormInputValues = Omit<z.input<typeof formSchema>, "stopLoss" | "takeProfit"> & {
+  stopLoss?: string | number | undefined;
+  takeProfit?: string | number | undefined;
+};
 type FormValues = z.output<typeof formSchema>;
 
 export default function ManualPage() {

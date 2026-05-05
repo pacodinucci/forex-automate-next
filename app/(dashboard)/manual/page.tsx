@@ -69,14 +69,15 @@ const formSchema = z.object({
   takeProfit: optionalPositiveNumber,
 });
 
-type FormValues = z.infer<typeof formSchema>;
+type FormInputValues = z.input<typeof formSchema>;
+type FormValues = z.output<typeof formSchema>;
 
 export default function ManualPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [symbols, setSymbols] = useState<string[]>(FALLBACK_SYMBOLS);
   const router = useRouter();
 
-  const form = useForm<FormValues>({
+  const form = useForm<FormInputValues, unknown, FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       symbol: "EURUSD",

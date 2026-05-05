@@ -69,10 +69,7 @@ const formSchema = z.object({
   takeProfit: optionalPositiveNumber,
 });
 
-type FormInputValues = Omit<z.input<typeof formSchema>, "stopLoss" | "takeProfit"> & {
-  stopLoss?: string | number | undefined;
-  takeProfit?: string | number | undefined;
-};
+type FormInputValues = z.input<typeof formSchema>;
 type FormValues = z.output<typeof formSchema>;
 
 export default function ManualPage() {
@@ -257,7 +254,7 @@ export default function ManualPage() {
                           type="number"
                           min={0}
                           step={1}
-                          value={field.value ?? ""}
+                          value={(field.value as string | number | undefined) ?? ""}
                           onChange={(event) => field.onChange(event.target.value)}
                           placeholder="Opcional"
                         />
@@ -279,7 +276,7 @@ export default function ManualPage() {
                           type="number"
                           min={0}
                           step={1}
-                          value={field.value ?? ""}
+                          value={(field.value as string | number | undefined) ?? ""}
                           onChange={(event) => field.onChange(event.target.value)}
                           placeholder="Opcional"
                         />

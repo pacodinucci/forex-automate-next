@@ -81,7 +81,7 @@ type LegContinuationSnapshot = {
   stage?: string;
   setupKey: string | null;
   breakoutTime: string | null;
-  searchEndMs: number | null;
+  setupStatusReason: string;
   m5Count: number;
   m1Count: number;
   openTradesCount: number;
@@ -179,7 +179,7 @@ function formatCountdown(ms: number) {
 function getSetupKey(setup: LegContinuationCurrentSetup | null) {
   if (!setup) return null;
   const side = String(setup.side ?? "");
-  const level = asNumber(setup.continuation_level);
+  const level = asNumber(setup.breakout_level);
   const start = toIsoFromUnknown(setup.search_start);
   const end = toIsoFromUnknown(setup.search_end);
   return [side, level ?? "", start ?? "", end ?? ""].join("|");
@@ -248,7 +248,7 @@ function extractMarkerPrice(details: Record<string, unknown>) {
     details.exit_price,
     details.close_price,
     details.level,
-    details.continuation_level,
+    details.breakout_level,
   ];
   for (const item of candidates) {
     const parsed = asNumber(item);
@@ -404,7 +404,7 @@ function RuntimeStateCard({
       : (runtimeState.m15_last_4 ?? runtimeState.m1_last_4 ?? [])) as BotRuntimeH4Candle[]),
   ].slice(-4);
   const typedCurrentSetup = getLegContinuationSetup(runtimeState.current_setup);
-  const continuationLevel = asNumber(typedCurrentSetup?.continuation_level);
+  const breakoutLevel = asNumber(typedCurrentSetup?.breakout_level);
   const currentSetup = (typedCurrentSetup ?? {}) as Record<string, unknown>;
   const m5LegFromSetup =
     asNumber((currentSetup as Record<string, unknown>).m5_leg) ??
@@ -421,6 +421,9 @@ function RuntimeStateCard({
   const setupSearchEndMs = setupSearchEndIso ? Date.parse(setupSearchEndIso) : null;
   const setupSearchStartIso = toIsoFromUnknown(typedCurrentSetup?.search_start);
   const setupBreakoutIso = toIsoFromUnknown(typedCurrentSetup?.breakout_time);
+  const setupStatusReason = String(runtimeState.setup_status_reason ?? "active");
+  const setupInvalidatedAtIso = toIsoFromUnknown(runtimeState.setup_invalidated_at);
+  const serverNowUtcIso = toIsoFromUnknown(runtimeState.server_now_utc);
   const nowMs = clockMs;
   const countdownMs = setupSearchEndMs !== null ? setupSearchEndMs - nowMs : null;
   const isRecentEntry = typeof lastEntryDetectedAt === "number" && nowMs - lastEntryDetectedAt < 5 * 60_000;
@@ -479,7 +482,6 @@ function RuntimeStateCard({
   const breakEvents = eventMarkers.filter((marker) => marker.kind === "break");
   const triggerEvents = eventMarkers.filter((marker) => marker.kind === "trigger");
   const exitEvents = eventMarkers.filter((marker) => marker.kind === "exit");
-  const lastBreakAt = breakEvents.length > 0 ? breakEvents[breakEvents.length - 1].time_utc : null;
   const blockerHint = isLegContinuationM5M1
     ? getLegContinuationBlockReason({
       runtimeActive,
@@ -630,8 +632,8 @@ function RuntimeStateCard({
                     <div className="text-sm uppercase">{typedCurrentSetup.side ?? "-"}</div>
                   </div>
                   <div>
-                    <div className="text-xs uppercase text-muted-foreground">Continuation level</div>
-                    <div className="text-sm">{continuationLevel?.toFixed(5) ?? "-"}</div>
+                    <div className="text-xs uppercase text-muted-foreground">Breakout level</div>
+                    <div className="text-sm">{breakoutLevel?.toFixed(5) ?? "-"}</div>
                   </div>
                   <div>
                     <div className="text-xs uppercase text-muted-foreground">Ventana</div>
@@ -660,17 +662,20 @@ function RuntimeStateCard({
                   <div className="text-sm text-amber-900">{blockerHint}</div>
                 </div>
                 <div>
-                  <div className="text-xs uppercase text-amber-800/80">Continuation level</div>
-                  <div className="text-sm text-amber-900">{continuationLevel?.toFixed(5) ?? "No definido"}</div>
+                  <div className="text-xs uppercase text-amber-800/80">Breakout level</div>
+                  <div className="text-sm text-amber-900">{breakoutLevel?.toFixed(5) ?? "No definido"}</div>
                 </div>
                 <div>
-                  <div className="text-xs uppercase text-amber-800/80">Eventos break/trigger</div>
-                  <div className="text-sm text-amber-900">{breakEvents.length} / {triggerEvents.length}</div>
+                  <div className="text-xs uppercase text-amber-800/80">Estado setup</div>
+                  <div className="text-sm text-amber-900">{setupStatusReason}</div>
                 </div>
                 <div>
-                  <div className="text-xs uppercase text-amber-800/80">Ultimo break</div>
-                  <div className="text-sm text-amber-900">{lastBreakAt ? new Date(lastBreakAt).toLocaleString() : "-"}</div>
+                  <div className="text-xs uppercase text-amber-800/80">Invalido desde</div>
+                  <div className="text-sm text-amber-900">{setupInvalidatedAtIso ? new Date(setupInvalidatedAtIso).toLocaleString() : "-"}</div>
                 </div>
+              </div>
+              <div className="mt-2 text-xs text-amber-900">
+                Eventos break/trigger: {breakEvents.length} / {triggerEvents.length} | Server UTC: {serverNowUtcIso ?? "-"}
               </div>
               {breakEvents.length > 0 && triggerEvents.length === 0 ? (
                 <p className="mt-3 text-xs text-amber-900">
@@ -679,7 +684,7 @@ function RuntimeStateCard({
               ) : null}
               {breakEvents.length === 0 && rawStage === "WAITING_BREAKOUT_OR_ENTRY" ? (
                 <p className="mt-3 text-xs text-amber-900">
-                  Todavia no hay ruptura confirmada por cierre del nivel de continuation.
+                  Todavia no hay ruptura confirmada por cierre del nivel de breakout.
                 </p>
               ) : null}
               {exitEvents.length > 0 ? (
@@ -786,7 +791,7 @@ function RuntimeStateCard({
                 symbol={String(runtimeState.symbol ?? "")}
                 stageLabel={currentStage}
                 candlesFallback={legContinuationSetupCandles}
-                continuationLevel={continuationLevel}
+                continuationLevel={breakoutLevel}
                 livePrice={livePrice}
                 liveTimestamp={liveTimestamp}
                 currentLeg={m5CurrentLeg}
@@ -800,7 +805,7 @@ function RuntimeStateCard({
                 symbol={String(runtimeState.symbol ?? "")}
                 stageLabel={currentStage}
                 candlesFallback={legContinuationEntryCandles}
-                continuationLevel={continuationLevel}
+                continuationLevel={breakoutLevel}
                 livePrice={livePrice}
                 liveTimestamp={liveTimestamp}
                 showLegLabels={isLegContinuationM5M1}
@@ -810,7 +815,7 @@ function RuntimeStateCard({
               />
               <div className="grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
                 <div>Stage: {currentStage}</div>
-                <div>Continuation: {continuationLevel?.toFixed(5) ?? "-"}</div>
+                <div>Breakout: {breakoutLevel?.toFixed(5) ?? "-"}</div>
               </div>
             </div>
           </div>
@@ -1071,14 +1076,14 @@ export default function BotDetailPage() {
 
     const currentSetup = getLegContinuationSetup(runtimeState.current_setup);
     const breakoutTime = toIsoFromUnknown(currentSetup?.breakout_time);
-    const searchEndIso = toIsoFromUnknown(currentSetup?.search_end);
+    const setupStatusReason = String(runtimeState.setup_status_reason ?? "active");
     const now = Date.now();
     const snapshot: LegContinuationSnapshot = {
       runtimeActive: Boolean(bot?.runtimeActive),
       stage: runtimeState.stage ? String(runtimeState.stage) : undefined,
       setupKey: getSetupKey(currentSetup),
       breakoutTime,
-      searchEndMs: searchEndIso ? Date.parse(searchEndIso) : null,
+      setupStatusReason,
       m5Count: Number(runtimeState.m5_count ?? 0),
       m1Count: Number(runtimeState.m1_count ?? 0),
       openTradesCount: openTrades.length,
@@ -1106,11 +1111,21 @@ export default function BotDetailPage() {
         toast.success("Operacion abierta");
       }
       if (previous.setupKey && !snapshot.setupKey && snapshot.openTradesCount <= previous.openTradesCount) {
-        const expired = previous.searchEndMs !== null && now > previous.searchEndMs;
+        const expired = snapshot.setupStatusReason === "expired_window";
+        const invalidated = snapshot.setupStatusReason === "invalidated_structure";
+        const streamGap = snapshot.setupStatusReason === "stream_gap";
         if (expired) {
           pushLcTimelineEvent("Setup expired", "La ventana del setup vencio sin entrada.", now);
           setLastSetupExpiredAt(now);
           toast.warning("Setup expirado sin entrada");
+        } else if (invalidated) {
+          pushLcTimelineEvent("Setup invalidated", "El setup se invalido por estructura.", now);
+          setLastSetupExpiredAt(now);
+          toast.warning("Setup invalidado por estructura");
+        } else if (streamGap) {
+          pushLcTimelineEvent("Setup paused", "Gap de stream: backend reseteo el setup.", now);
+          setLastSetupExpiredAt(now);
+          toast.warning("Setup reseteado por gap de stream");
         }
       }
     }

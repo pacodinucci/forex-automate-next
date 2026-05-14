@@ -1,16 +1,12 @@
-const LOCAL_API_BASE = "http://127.0.0.1:8000";
-const LOCAL_WS_BASE = "ws://127.0.0.1:8000";
+const DEFAULT_LOCAL_API_BASE = "http://127.0.0.1:8000";
+const DEFAULT_LOCAL_WS_BASE = "ws://127.0.0.1:8000";
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
 }
 
-function getPublicApiEnv() {
-  return process.env.NEXT_PUBLIC_API_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
-}
-
-function getPublicWsEnv() {
-  return process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_WS_URL ?? "";
+function isProduction() {
+  return process.env.NODE_ENV === "production";
 }
 
 function toWsBase(url: string) {
@@ -30,65 +26,77 @@ function toWsBase(url: string) {
 }
 
 function ensureSecureWsInBrowser(url: string) {
-  if (typeof window !== "undefined" && window.location.protocol === "https:" && url.startsWith("ws://")) {
+  if (
+    typeof window !== "undefined" &&
+    window.location.protocol === "https:" &&
+    url.startsWith("ws://")
+  ) {
     return `wss://${url.slice("ws://".length)}`;
   }
 
   return url;
 }
 
-function isProduction() {
-  return process.env.NODE_ENV === "production";
+function getPublicApiEnv() {
+  return (
+    process.env.NEXT_PUBLIC_API_URL ??
+    process.env.NEXT_PUBLIC_API_BASE_URL ??
+    ""
+  );
+}
+
+function getPublicWsEnv() {
+  return (
+    process.env.NEXT_PUBLIC_WS_URL ?? process.env.NEXT_PUBLIC_API_WS_URL ?? ""
+  );
 }
 
 export function getPublicApiBaseUrl() {
   const configured = trimTrailingSlash(getPublicApiEnv());
+
   if (configured) {
     return configured;
   }
 
   if (!isProduction()) {
-    return LOCAL_API_BASE;
+    return DEFAULT_LOCAL_API_BASE;
   }
 
-  throw new Error(
-    "Missing NEXT_PUBLIC_API_URL (or NEXT_PUBLIC_API_BASE_URL) in production."
-  );
+  return "https://api.nodemelon.xyz";
 }
 
 export function getServerApiBaseUrl() {
   const configured = trimTrailingSlash(
-    process.env.BOT_API_BASE_URL ?? getPublicApiEnv()
+    process.env.BOT_API_BASE_URL ?? getPublicApiEnv(),
   );
+
   if (configured) {
     return configured;
   }
 
   if (!isProduction()) {
-    return LOCAL_API_BASE;
+    return DEFAULT_LOCAL_API_BASE;
   }
 
-  throw new Error(
-    "Missing BOT_API_BASE_URL (or NEXT_PUBLIC_API_URL / NEXT_PUBLIC_API_BASE_URL) in production."
-  );
+  return "https://api.nodemelon.xyz";
 }
 
 export function getPublicWsBaseUrl() {
   const explicitWs = trimTrailingSlash(getPublicWsEnv());
+
   if (explicitWs) {
     return ensureSecureWsInBrowser(explicitWs);
   }
 
   const apiBase = trimTrailingSlash(getPublicApiEnv());
+
   if (apiBase) {
-    return ensureSecureWsInBrowser(trimTrailingSlash(toWsBase(apiBase)));
+    return ensureSecureWsInBrowser(toWsBase(apiBase));
   }
 
   if (!isProduction()) {
-    return LOCAL_WS_BASE;
+    return DEFAULT_LOCAL_WS_BASE;
   }
 
-  throw new Error(
-    "Missing NEXT_PUBLIC_WS_URL (or NEXT_PUBLIC_API_WS_URL, or NEXT_PUBLIC_API_URL) in production."
-  );
+  return "wss://api.nodemelon.xyz";
 }
